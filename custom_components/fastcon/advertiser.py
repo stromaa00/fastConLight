@@ -21,6 +21,10 @@ BLUEZ_SERVICE = "org.bluez"
 ADVERTISING_MANAGER = "org.bluez.LEAdvertisingManager1"
 ADVERTISEMENT_PATH = "/org/homeassistant/fastcon/advertisement0"
 
+# Bluetooth 4.x controllers reject non-connectable advertising faster than
+# 100 ms, so the firmware's 43 ms interval can't be used here.
+DEFAULT_INTERVAL_MS = 100
+
 
 class AdvertiseError(Exception):
     """Raised when BlueZ refuses an advertising request."""
@@ -29,11 +33,10 @@ class AdvertiseError(Exception):
 class _Advertisement(ServiceInterface):
     """org.bluez.LEAdvertisement1 carrying one manufacturer data payload."""
 
-    def __init__(self, manufacturer_id: int, data: bytes, interval_ms: int) -> None:
+    def __init__(self, manufacturer_id: int, data: bytes) -> None:
         super().__init__("org.bluez.LEAdvertisement1")
         self._manufacturer_id = manufacturer_id
         self._data = data
-        self._interval_ms = interval_ms
 
     @method()
     def Release(self):  # noqa: N802
@@ -46,6 +49,14 @@ class _Advertisement(ServiceInterface):
     @dbus_property(access=PropertyAccess.READ)
     def ManufacturerData(self) -> "a{qv}":  # noqa: N802, F722
         return {self._manufacturer_id: Variant("ay", self._data)}
+
+
+class _TimedAdvertisement(_Advertisement):
+    """Advertisement that also asks for a fixed advertising interval."""
+
+    def __init__(self, manufacturer_id: int, data: bytes, interval_ms: int) -> None:
+        super().__init__(manufacturer_id, data)
+        self._interval_ms = interval_ms
 
     @dbus_property(access=PropertyAccess.READ)
     def MinInterval(self) -> "u":  # noqa: N802, F821
@@ -92,9 +103,11 @@ async def async_list_adapters() -> list[str]:
 class BlueZAdvertiser:
     """Broadcasts payloads on one BlueZ adapter, one at a time."""
 
-    def __init__(self, adapter: str, interval_ms: int = 43) -> None:
+    def __init__(self, adapter: str, interval_ms: int = DEFAULT_INTERVAL_MS) -> None:
         self._adapter_path = f"/org/bluez/{adapter}"
         self._interval_ms = interval_ms
+        # Cleared if the adapter refuses a custom interval; BlueZ then picks one.
+        self._use_interval = True
         self._bus: MessageBus | None = None
 
     async def _get_bus(self) -> MessageBus:
@@ -105,15 +118,20 @@ class BlueZAdvertiser:
     async def advertise(self, manufacturer_id: int, data: bytes, duration: float) -> None:
         """Advertise the payload for `duration` seconds."""
         bus = await self._get_bus()
-        bus.export(
-            ADVERTISEMENT_PATH,
-            _Advertisement(manufacturer_id, data, self._interval_ms),
-        )
         try:
-            await _call(
-                bus, self._adapter_path, ADVERTISING_MANAGER,
-                "RegisterAdvertisement", "oa{sv}", [ADVERTISEMENT_PATH, {}],
+            await self._register(bus, manufacturer_id, data)
+        except AdvertiseError as err:
+            if not self._use_interval:
+                raise
+            _LOGGER.warning(
+                "Adapter refused a %d ms advertising interval (%s); "
+                "retrying with the BlueZ default interval",
+                self._interval_ms, err,
             )
+            self._use_interval = False
+            await self._register(bus, manufacturer_id, data)
+
+        try:
             try:
                 await asyncio.sleep(duration)
             finally:
@@ -126,6 +144,22 @@ class BlueZAdvertiser:
                     _LOGGER.debug("Unregistering advertisement failed: %s", err)
         finally:
             bus.unexport(ADVERTISEMENT_PATH)
+
+    async def _register(self, bus: MessageBus, manufacturer_id: int, data: bytes) -> None:
+        advertisement = (
+            _TimedAdvertisement(manufacturer_id, data, self._interval_ms)
+            if self._use_interval
+            else _Advertisement(manufacturer_id, data)
+        )
+        bus.export(ADVERTISEMENT_PATH, advertisement)
+        try:
+            await _call(
+                bus, self._adapter_path, ADVERTISING_MANAGER,
+                "RegisterAdvertisement", "oa{sv}", [ADVERTISEMENT_PATH, {}],
+            )
+        except AdvertiseError:
+            bus.unexport(ADVERTISEMENT_PATH)
+            raise
 
     def close(self) -> None:
         """Disconnect from D-Bus."""
