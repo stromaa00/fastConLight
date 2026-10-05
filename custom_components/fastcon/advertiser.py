@@ -16,6 +16,8 @@ from dbus_fast.aio import MessageBus
 from dbus_fast.constants import PropertyAccess
 from dbus_fast.service import ServiceInterface, dbus_property, method
 
+from .mgmt import MgmtAdvertiser, MgmtError
+
 _LOGGER = logging.getLogger(__name__)
 
 BLUEZ_SERVICE = "org.bluez"
@@ -234,3 +236,39 @@ class BlueZAdvertiser:
         if self._bus is not None:
             self._bus.disconnect()
             self._bus = None
+
+
+class Advertiser:
+    """Sends through MGMT, falling back to BlueZ D-Bus if MGMT isn't usable.
+
+    MGMT is preferred because it accepts the full 31-byte packet; BlueZ only
+    works where the kernel leaves enough room next to its own flags.
+    """
+
+    def __init__(self, adapter: str) -> None:
+        self._adapter = adapter
+        self._mgmt: MgmtAdvertiser | None = MgmtAdvertiser(adapter, DEFAULT_INTERVAL_MS)
+        self._bluez = BlueZAdvertiser(adapter)
+
+    async def advertise(self, manufacturer_id: int, data: bytes, duration: float) -> None:
+        """Advertise the payload for `duration` seconds."""
+        if self._mgmt is not None:
+            try:
+                await self._mgmt.advertise(manufacturer_id, data, duration)
+            except (MgmtError, OSError, TimeoutError) as err:
+                _LOGGER.warning(
+                    "Advertising through the kernel management API on %s failed (%s); "
+                    "using BlueZ D-Bus instead",
+                    self._adapter, err,
+                )
+                self._mgmt.close()
+                self._mgmt = None
+            else:
+                return
+        await self._bluez.advertise(manufacturer_id, data, duration)
+
+    def close(self) -> None:
+        """Release sockets and D-Bus connections."""
+        if self._mgmt is not None:
+            self._mgmt.close()
+        self._bluez.close()

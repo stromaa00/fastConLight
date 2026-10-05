@@ -327,7 +327,9 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 **How it works**
 
 - **Receiving:** registers with HA's `bluetooth` integration for manufacturer ID `0xFFF0` from addresses starting `11:22:`. Discovery broadcasts are parsed and new devices are added automatically with the next free mesh address (1-255). Broadcasts heard by ESPHome Bluetooth proxies are received too.
-- **Sending:** HA's Bluetooth stack can only scan, so commands are broadcast by registering a BlueZ `LEAdvertisement1` (type `broadcast`, manufacturer data `0xFFF0` + 24-byte command) on the chosen adapter through D-Bus, for the configured duration (default 3 s), then unregistering it.
+- **Sending:** HA's Bluetooth stack can only scan, so commands are broadcast through the Linux Bluetooth management API (MGMT, *Add Extended Advertising Parameters/Data*) with the same 31 bytes the firmware sends (flags `02 01 02` + manufacturer data `0xFFF0` + 24-byte command), at a 100 ms interval for the configured duration (default 3 s).
+  - BlueZ's D-Bus `LEAdvertisement1` API is only a fallback: it reserves space for its own flags, so the kernel rejects the 31-byte packet with `Invalid Parameters (0x0d)` (seen on a Home Assistant Yellow).
+  - MGMT needs `CAP_NET_ADMIN`, which the Home Assistant OS core container has.
 - **Queue:** one command is on air at a time. A newer command for the same light replaces an unsent one, so dragging a slider doesn't build a backlog.
 - **Storage:** discovered/added devices and their mesh addresses are saved in HA storage and survive restarts.
 

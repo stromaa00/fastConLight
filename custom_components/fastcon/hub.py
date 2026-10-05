@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
-from .advertiser import AdvertiseError, BlueZAdvertiser
+from .advertiser import AdvertiseError, Advertiser
 from .const import (
     CONF_ADAPTER,
     CONF_ADVERTISE_DURATION,
@@ -67,7 +67,7 @@ class FastconHub:
         self._store: Store[dict] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
-        self._advertiser = BlueZAdvertiser(self.adapter)
+        self._advertiser = Advertiser(self.adapter)
         self._builder = CommandBuilder()
         # Pending commands keyed by target, so a newer command for the same
         # light replaces one that hasn't been sent yet (e.g. slider drags).
