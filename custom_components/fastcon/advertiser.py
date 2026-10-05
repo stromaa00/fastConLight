@@ -16,7 +16,12 @@ from dbus_fast.aio import MessageBus
 from dbus_fast.constants import PropertyAccess
 from dbus_fast.service import ServiceInterface, dbus_property, method
 
-from .mgmt import MgmtAdvertiser, MgmtError
+from .mgmt import (
+    MGMT_STATUS_PERMISSION_DENIED,
+    MgmtAdvertiser,
+    MgmtError,
+    MgmtStatusError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -255,17 +260,31 @@ class Advertiser:
         if self._mgmt is not None:
             try:
                 await self._mgmt.advertise(manufacturer_id, data, duration)
-            except (MgmtError, OSError, TimeoutError) as err:
-                _LOGGER.warning(
-                    "Advertising through the kernel management API on %s failed (%s); "
-                    "using BlueZ D-Bus instead",
-                    self._adapter, err,
-                )
-                self._mgmt.close()
-                self._mgmt = None
+            except TimeoutError as err:
+                raise AdvertiseError("kernel management API timed out") from err
+            except MgmtError as err:
+                if not (
+                    isinstance(err, MgmtStatusError)
+                    and err.status == MGMT_STATUS_PERMISSION_DENIED
+                ):
+                    # The kernel was reached but refused; BlueZ can't do better.
+                    raise AdvertiseError(f"kernel management API: {err}") from err
+                self._disable_mgmt(err)
+            except OSError as err:
+                self._disable_mgmt(err)
             else:
                 return
         await self._bluez.advertise(manufacturer_id, data, duration)
+
+    def _disable_mgmt(self, err: Exception) -> None:
+        """MGMT isn't usable here (e.g. no CAP_NET_ADMIN); use BlueZ from now on."""
+        _LOGGER.warning(
+            "Can't use the kernel management API on %s (%s); using BlueZ D-Bus instead",
+            self._adapter, err,
+        )
+        if self._mgmt is not None:
+            self._mgmt.close()
+        self._mgmt = None
 
     def close(self) -> None:
         """Release sockets and D-Bus connections."""

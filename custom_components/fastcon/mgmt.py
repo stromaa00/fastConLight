@@ -132,9 +132,10 @@ class MgmtAdvertiser:
         self._index = int(adapter.removeprefix("hci"))
         self._interval_ms = interval_ms
         self._sock: socket.socket | None = None
-        # Non-connectable first, like the firmware; connectable uses the public
-        # address and avoids setting a random one while Home Assistant scans.
-        self._connectable_options = [False, True]
+        # Connectable first: it uses the adapter's public address. Non-connectable
+        # needs a random address, which controllers refuse to set while Home
+        # Assistant is scanning ("Opcode 0x2005 failed: -16").
+        self._connectable_options = [True, False]
 
     async def _request(self, opcode: int, params: bytes = b"") -> bytes:
         if self._sock is None:
@@ -170,15 +171,18 @@ class MgmtAdvertiser:
                     ext_adv_params(instance, connectable, self._interval_ms),
                 )
                 await self._request(MGMT_OP_ADD_EXT_ADV_DATA, ext_adv_data(instance, adv))
-            except MgmtStatusError as err:
+            except (MgmtStatusError, TimeoutError) as err:
                 await self._remove(instance)
-                if err.status == MGMT_STATUS_PERMISSION_DENIED:
+                if getattr(err, "status", None) == MGMT_STATUS_PERMISSION_DENIED:
                     raise
-                errors.append(f"[{'connectable' if connectable else 'non-connectable'}] {err}")
+                reason = str(err) or "timed out"
+                kind = "connectable" if connectable else "non-connectable"
+                errors.append(f"[{kind}] {reason}")
                 continue
             if i:
                 _LOGGER.warning(
-                    "hci%d advertises only as connectable (%s)", self._index, "; ".join(errors)
+                    "hci%d advertises only as %s (%s)", self._index,
+                    "connectable" if connectable else "non-connectable", "; ".join(errors),
                 )
                 self._connectable_options = self._connectable_options[i:]
             try:
