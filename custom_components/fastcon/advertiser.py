@@ -8,6 +8,7 @@ by registering a short-lived LE advertisement on the same adapter via D-Bus.
 # from the annotations below and needs them unquoted.
 
 import asyncio
+from dataclasses import dataclass
 import logging
 
 from dbus_fast import BusType, Message, MessageType, Variant
@@ -30,13 +31,26 @@ class AdvertiseError(Exception):
     """Raised when BlueZ refuses an advertising request."""
 
 
+@dataclass(frozen=True)
+class _Variant:
+    """One way of asking BlueZ to advertise; controllers differ in what they accept."""
+
+    adv_type: str
+    interval_ms: int | None
+
+    def __str__(self) -> str:
+        interval = f"{self.interval_ms} ms" if self.interval_ms else "default interval"
+        return f"{self.adv_type}, {interval}"
+
+
 class _Advertisement(ServiceInterface):
     """org.bluez.LEAdvertisement1 carrying one manufacturer data payload."""
 
-    def __init__(self, manufacturer_id: int, data: bytes) -> None:
+    def __init__(self, manufacturer_id: int, data: bytes, adv_type: str) -> None:
         super().__init__("org.bluez.LEAdvertisement1")
         self._manufacturer_id = manufacturer_id
         self._data = data
+        self._adv_type = adv_type
 
     @method()
     def Release(self):  # noqa: N802
@@ -44,7 +58,7 @@ class _Advertisement(ServiceInterface):
 
     @dbus_property(access=PropertyAccess.READ)
     def Type(self) -> "s":  # noqa: N802, F821
-        return "broadcast"
+        return self._adv_type
 
     @dbus_property(access=PropertyAccess.READ)
     def ManufacturerData(self) -> "a{qv}":  # noqa: N802, F722
@@ -54,8 +68,10 @@ class _Advertisement(ServiceInterface):
 class _TimedAdvertisement(_Advertisement):
     """Advertisement that also asks for a fixed advertising interval."""
 
-    def __init__(self, manufacturer_id: int, data: bytes, interval_ms: int) -> None:
-        super().__init__(manufacturer_id, data)
+    def __init__(
+        self, manufacturer_id: int, data: bytes, adv_type: str, interval_ms: int
+    ) -> None:
+        super().__init__(manufacturer_id, data, adv_type)
         self._interval_ms = interval_ms
 
     @dbus_property(access=PropertyAccess.READ)
@@ -100,14 +116,29 @@ async def async_list_adapters() -> list[str]:
     )
 
 
+def _plain(value):
+    """Unwrap dbus-fast Variants for readable logging."""
+    if isinstance(value, Variant):
+        return _plain(value.value)
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
+    return value
+
+
 class BlueZAdvertiser:
     """Broadcasts payloads on one BlueZ adapter, one at a time."""
 
     def __init__(self, adapter: str, interval_ms: int = DEFAULT_INTERVAL_MS) -> None:
+        self._adapter = adapter
         self._adapter_path = f"/org/bluez/{adapter}"
-        self._interval_ms = interval_ms
-        # Cleared if the adapter refuses a custom interval; BlueZ then picks one.
-        self._use_interval = True
+        # Tried in order until one is accepted; the working one is kept.
+        self._variants = [
+            _Variant("broadcast", interval_ms),
+            _Variant("broadcast", None),
+            _Variant("peripheral", None),
+        ]
         self._bus: MessageBus | None = None
 
     async def _get_bus(self) -> MessageBus:
@@ -118,19 +149,7 @@ class BlueZAdvertiser:
     async def advertise(self, manufacturer_id: int, data: bytes, duration: float) -> None:
         """Advertise the payload for `duration` seconds."""
         bus = await self._get_bus()
-        try:
-            await self._register(bus, manufacturer_id, data)
-        except AdvertiseError as err:
-            if not self._use_interval:
-                raise
-            _LOGGER.warning(
-                "Adapter refused a %d ms advertising interval (%s); "
-                "retrying with the BlueZ default interval",
-                self._interval_ms, err,
-            )
-            self._use_interval = False
-            await self._register(bus, manufacturer_id, data)
-
+        await self._register_first_accepted(bus, manufacturer_id, data)
         try:
             try:
                 await asyncio.sleep(duration)
@@ -145,11 +164,39 @@ class BlueZAdvertiser:
         finally:
             bus.unexport(ADVERTISEMENT_PATH)
 
-    async def _register(self, bus: MessageBus, manufacturer_id: int, data: bytes) -> None:
+    async def _register_first_accepted(
+        self, bus: MessageBus, manufacturer_id: int, data: bytes
+    ) -> None:
+        errors: list[str] = []
+        for index, variant in enumerate(self._variants):
+            try:
+                await self._register(bus, variant, manufacturer_id, data)
+            except AdvertiseError as err:
+                errors.append(f"[{variant}] {err}")
+                continue
+            if index:
+                _LOGGER.warning(
+                    "%s accepted advertising only as: %s (refused: %s)",
+                    self._adapter, variant, "; ".join(errors),
+                )
+                # Keep using the variant that works.
+                self._variants = self._variants[index:]
+            return
+
+        diagnostics = await self._diagnostics(bus)
+        raise AdvertiseError(
+            f"{'; '.join(errors)}. Adapter state: {diagnostics}. "
+            "The bluetoothd log has the exact reason "
+            "(Home Assistant OS: ha host logs --identifier bluetoothd)"
+        )
+
+    async def _register(
+        self, bus: MessageBus, variant: _Variant, manufacturer_id: int, data: bytes
+    ) -> None:
         advertisement = (
-            _TimedAdvertisement(manufacturer_id, data, self._interval_ms)
-            if self._use_interval
-            else _Advertisement(manufacturer_id, data)
+            _TimedAdvertisement(manufacturer_id, data, variant.adv_type, variant.interval_ms)
+            if variant.interval_ms
+            else _Advertisement(manufacturer_id, data, variant.adv_type)
         )
         bus.export(ADVERTISEMENT_PATH, advertisement)
         try:
@@ -160,6 +207,27 @@ class BlueZAdvertiser:
         except AdvertiseError:
             bus.unexport(ADVERTISEMENT_PATH)
             raise
+
+    async def _diagnostics(self, bus: MessageBus) -> dict:
+        """Read what the adapter reports about itself and its advertising support."""
+        result: dict = {}
+        for interface, keys in (
+            ("org.bluez.Adapter1", ("Powered", "Discovering", "Roles")),
+            (ADVERTISING_MANAGER, None),
+        ):
+            try:
+                reply = await _call(
+                    bus, self._adapter_path, "org.freedesktop.DBus.Properties",
+                    "GetAll", "s", [interface],
+                )
+            except AdvertiseError as err:
+                result[interface] = str(err)
+                continue
+            props = _plain(reply.body[0])
+            result.update(
+                {k: v for k, v in props.items() if keys is None or k in keys}
+            )
+        return result
 
     def close(self) -> None:
         """Disconnect from D-Bus."""
