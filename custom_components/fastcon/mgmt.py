@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
-import ctypes.util
 import logging
 import os
 import socket
@@ -110,7 +109,10 @@ class _SockaddrHci(ctypes.Structure):
 
 def _open_control_socket() -> socket.socket:
     # Python's socket module can't bind to an HCI channel, so use libc.
-    libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+    # CDLL(None) resolves symbols from the running process, which works with
+    # both glibc and musl (the Home Assistant container is Alpine/musl, where
+    # "libc.so.6" doesn't exist and find_library("c") often returns None).
+    libc = ctypes.CDLL(None, use_errno=True)
     fd = libc.socket(
         AF_BLUETOOTH, socket.SOCK_RAW | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK, BTPROTO_HCI
     )

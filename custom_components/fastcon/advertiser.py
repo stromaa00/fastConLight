@@ -254,6 +254,8 @@ class Advertiser:
         self._adapter = adapter
         self._mgmt: MgmtAdvertiser | None = MgmtAdvertiser(adapter, DEFAULT_INTERVAL_MS)
         self._bluez = BlueZAdvertiser(adapter)
+        # Once MGMT has worked, later errors are treated as transient.
+        self._mgmt_worked = False
 
     async def advertise(self, manufacturer_id: int, data: bytes, duration: float) -> None:
         """Advertise the payload for `duration` seconds."""
@@ -271,15 +273,21 @@ class Advertiser:
                     raise AdvertiseError(f"kernel management API: {err}") from err
                 self._disable_mgmt(err)
             except OSError as err:
+                if self._mgmt_worked:
+                    # Reopen the socket on the next command instead of giving up.
+                    self._mgmt.close()
+                    raise AdvertiseError(f"kernel management API: {err!r}") from err
                 self._disable_mgmt(err)
             else:
+                self._mgmt_worked = True
                 return
         await self._bluez.advertise(manufacturer_id, data, duration)
 
     def _disable_mgmt(self, err: Exception) -> None:
         """MGMT isn't usable here (e.g. no CAP_NET_ADMIN); use BlueZ from now on."""
         _LOGGER.warning(
-            "Can't use the kernel management API on %s (%s); using BlueZ D-Bus instead",
+            "Can't use the kernel management API on %s (%r); using BlueZ D-Bus instead, "
+            "which can't send full BRMesh packets on most systems",
             self._adapter, err,
         )
         if self._mgmt is not None:
