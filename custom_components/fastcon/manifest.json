@@ -1,0 +1,15 @@
+{
+  "domain": "fastcon",
+  "name": "BRMesh / Fastcon",
+  "bluetooth": [{ "manufacturer_id": 65520 }],
+  "codeowners": ["@stromaa00"],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "documentation": "https://github.com/stromaa00/fastConLight",
+  "integration_type": "hub",
+  "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/stromaa00/fastConLight/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "2.1.0"
+}

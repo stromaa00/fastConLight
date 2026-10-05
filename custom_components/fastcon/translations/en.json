@@ -1,0 +1,68 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BRMesh via Home Assistant Bluetooth",
+        "description": "Commands are broadcast from this Bluetooth adapter. Use the phone key from the BRMesh app if your lights are already set up there.",
+        "data": {
+          "adapter": "Bluetooth adapter",
+          "phone_key": "Phone key (8 hex characters)"
+        }
+      }
+    },
+    "error": {
+      "invalid_key": "Must be exactly 8 hex characters, e.g. A1A2A3A4."
+    },
+    "abort": {
+      "already_configured": "BRMesh is already set up.",
+      "single_instance_allowed": "BRMesh is already set up.",
+      "not_supported": "This device is not a BRMesh light.",
+      "bluez_unavailable": "Could not reach BlueZ over D-Bus. This option needs Home Assistant running on Linux (Home Assistant OS, Supervised, or Docker with /run/dbus mounted).",
+      "no_adapters": "No local Bluetooth adapter that can advertise was found. Bluetooth proxies can't send commands."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "menu_options": {
+          "settings": "Settings",
+          "add_device": "Add a light manually"
+        }
+      },
+      "settings": {
+        "title": "Settings",
+        "data": {
+          "phone_key": "Phone key (8 hex characters)",
+          "advertise_duration": "Broadcast time per command"
+        },
+        "data_description": {
+          "advertise_duration": "How long each command is broadcast. Shorter is faster; raise it if lights miss commands."
+        }
+      },
+      "add_device": {
+        "title": "Add a light manually",
+        "description": "Use the values from a discovery log or an ESPHome fastcon light.",
+        "data": {
+          "device_id": "Device ID (12 hex characters)",
+          "device_type": "Device type (4 hex characters)",
+          "device_key": "Device key (8 hex characters)",
+          "mesh_address": "Mesh address"
+        }
+      }
+    },
+    "error": {
+      "invalid_key": "Must be exactly 8 hex characters.",
+      "invalid_device_id": "Must be exactly 12 hex characters.",
+      "invalid_device_type": "Must be exactly 4 hex characters, e.g. A8A1."
+    },
+    "abort": {
+      "not_loaded": "The integration must be loaded to add lights."
+    }
+  },
+  "entity": {
+    "button": {
+      "scan": { "name": "Scan for devices" },
+      "bind_all": { "name": "Bind all devices" }
+    }
+  }
+}

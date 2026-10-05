@@ -1,0 +1,133 @@
+# ESPHome configuration for Fastcon BLE Mesh Lighting
+# Board: Generic ESP32 DevKit or ESP32-POE
+# Features: BLE 4.2+, WiFi
+
+substitutions:
+  device_name: fastcon-esp32
+  friendly_name: "Fastcon ESP32"
+  
+esphome:
+  name: ${device_name}
+  platform: ESP32
+  board: esp32dev  # Change to your specific board
+  
+  # Include custom component
+  includes:
+    - components/fastcon/
+
+# WiFi configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # Enable fallback hotspot
+  ap:
+    ssid: "${device_name} Fallback"
+    password: !secret ap_password
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+# Enable OTA updates
+ota:
+  password: !secret ota_password
+
+# Enable web server
+web_server:
+  port: 80
+
+# Fastcon component configuration
+fastcon:
+  id: fastcon_hub
+  phone_key: "A1A2A3A4"  # Your BRMesh phone key (4 bytes hex)
+  auto_discover: true
+
+# Example lights - add your discovered devices here
+# Copy the device info from the logs when auto-discovery runs
+light:
+  # RGB Light Example
+  - platform: fastcon
+    name: "RGB Strip"
+    fastcon_id: fastcon_hub
+    device_id: "AABBCCDDEEFF"  # From auto-discovery log
+    device_type: "A8A0"         # Light_RGB (43168)
+    device_key: "11223344"      # From auto-discovery log
+    mesh_address: 1
+    
+  # RGBCW Light Example
+  - platform: fastcon
+    name: "Main Light"
+    fastcon_id: fastcon_hub
+    device_id: "112233445566"
+    device_type: "A83A"         # Light_RGBCW (43050)
+    device_key: "AABBCCDD"
+    mesh_address: 2
+    
+  # CCT Light Example
+  - platform: fastcon
+    name: "Office Light"
+    fastcon_id: fastcon_hub
+    device_id: "223344556677"
+    device_type: "A83B"         # Light_CCT (43051)
+    device_key: "BBCCDDEE"
+    mesh_address: 3
+
+# Buttons for scan and bind operations
+button:
+  - platform: template
+    name: "Scan for Devices"
+    icon: "mdi:magnify-scan"
+    on_press:
+      - logger.log: "Starting device scan..."
+      - fastcon.scan:
+          id: fastcon_hub
+          
+  - platform: template
+    name: "Bind All Devices"
+    icon: "mdi:link-variant"
+    on_press:
+      - logger.log: "Binding all devices..."
+      - fastcon.bind_all:
+          id: fastcon_hub
+          
+  - platform: restart
+    name: "${friendly_name} Restart"
+
+# Status indicators
+sensor:
+  - platform: wifi_signal
+    name: "${friendly_name} WiFi Signal"
+    update_interval: 60s
+    
+  - platform: uptime
+    name: "${friendly_name} Uptime"
+    
+  - platform: template
+    name: "${friendly_name} Registered Lights"
+    lambda: |-
+      return id(fastcon_hub).get_lights_count();
+    update_interval: 60s
+
+text_sensor:
+  - platform: version
+    name: "${friendly_name} ESPHome Version"
+    
+  - platform: wifi_info
+    ip_address:
+      name: "${friendly_name} IP Address"
+    ssid:
+      name: "${friendly_name} SSID"
+    mac_address:
+      name: "${friendly_name} MAC Address"
+
+# Status LED (if available)
+status_led:
+  pin:
+    number: GPIO2
+    inverted: false
