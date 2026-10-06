@@ -45,6 +45,7 @@ from .protocol import (
     Heartbeat,
     describe_action,
     describe_broadcast,
+    describe_command,
     parse_broadcast,
     parse_heartbeat,
 )
@@ -99,7 +100,10 @@ class FastconHub:
         self._builder = CommandBuilder()
         # Pending commands keyed by target, so a newer command for the same
         # light replaces one that hasn't been sent yet (e.g. slider drags).
-        self._pending: dict[str, Callable[[], bytes]] = {}
+        # key -> (build payload, describe action, target device)
+        self._pending: dict[
+            str, tuple[Callable[[], bytes], Callable[[], str], FastconDevice | None]
+        ] = {}
         self._wakeup = asyncio.Event()
         # Monotonic time of the last heartbeat per DID, and DIDs considered offline
         self._last_heartbeat: dict[str, float] = {}
@@ -246,6 +250,7 @@ class FastconHub:
             action += " (sent by Home Assistant)" if own else " (from another controller)"
         record = {
             "time": dt_util.utcnow().isoformat(),
+            "direction": "received",
             "action": action,
             "address": service_info.address,
             "rssi": service_info.rssi,
@@ -397,7 +402,7 @@ class FastconHub:
     @callback
     def async_scan(self) -> None:
         """Ask unbound lights to announce themselves."""
-        self._queue("scan", self._builder.scan)
+        self._queue("scan", self._builder.scan, lambda: "scan request")
 
     @callback
     def async_bind(self, device: FastconDevice, pending: bool = True) -> None:
@@ -422,6 +427,8 @@ class FastconHub:
                 self.phone_key,
                 bytes.fromhex(device.key),
             ),
+            lambda: f"bind to mesh address {device.mesh_address}",
+            device,
         )
 
     @callback
@@ -462,11 +469,40 @@ class FastconHub:
         self._queue(
             f"light:{device.did}",
             lambda: self._builder.light(device.mesh_address, self.phone_key, command),
+            lambda: describe_command(command),
+            device,
         )
 
-    def _queue(self, key: str, build: Callable[[], bytes]) -> None:
-        self._pending[key] = build
+    def _queue(
+        self,
+        key: str,
+        build: Callable[[], bytes],
+        action: Callable[[], str],
+        device: FastconDevice | None = None,
+    ) -> None:
+        self._pending[key] = (build, action, device)
         self._wakeup.set()
+
+    def _record_sent(
+        self, action: str, device: FastconDevice | None, payload: bytes, error: str | None
+    ) -> None:
+        """Log a command we sent; lights don't relay binds and scans, so we never hear them."""
+        record = {
+            "time": dt_util.utcnow().isoformat(),
+            "direction": "sent",
+            "action": action,
+            "light": device.name if device else None,
+            "mesh_address": device.mesh_address if device else None,
+            "sequence": self._builder.last_sequence,
+            "result": error or "ok",
+            "raw": payload.hex(),
+        }
+        self.recent_broadcasts.append(record)
+        _BROADCAST_LOGGER.info(
+            "SENT %s | light=%s mesh=%s seq=%s result=%s raw=%s",
+            action, record["light"], record["mesh_address"], record["sequence"],
+            record["result"], record["raw"],
+        )
 
     async def _async_send_loop(self) -> None:
         while True:
@@ -474,14 +510,18 @@ class FastconHub:
             self._wakeup.clear()
             while self._pending:
                 key = next(iter(self._pending))
-                payload = self._pending.pop(key)()
+                build, action, device = self._pending.pop(key)
+                payload = build()
                 self._sent_sequences.append(self._builder.last_sequence)
                 _LOGGER.debug("Sending %s: %s", key, payload.hex())
+                error = None
                 try:
                     await self._advertiser.advertise(
                         MANUFACTURER_ID, payload, self.duration
                     )
                 except (AdvertiseError, OSError) as err:
+                    error = str(err)
                     _LOGGER.error(
                         "Could not advertise on %s (%s): %s", self.adapter, key, err
                     )
+                self._record_sent(action(), device, payload, error)
