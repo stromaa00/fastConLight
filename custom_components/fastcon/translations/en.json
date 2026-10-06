@@ -61,8 +61,17 @@
   },
   "entity": {
     "button": {
-      "scan": { "name": "Scan for devices" },
-      "bind_all": { "name": "Bind all devices" }
+      "scan": {
+        "name": "Scan for devices"
+      },
+      "bind_all": {
+        "name": "Bind all devices"
+      }
+    },
+    "switch": {
+      "auto_bind": {
+        "name": "Auto-bind discovered lights"
+      }
     }
   }
 }

@@ -345,6 +345,7 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 |--------|---------|
 | `button.<hub>_scan_for_devices` | Broadcasts the scan command |
 | `button.<hub>_bind_all_devices` | Sends a bind (discovery response) to every known device |
+| `switch.<hub>_auto_bind_discovered_lights` | When on, lights found by a scan are bound automatically (off by default, saved) |
 | `light.brmesh_<name>` | One per light; assumed state, restored after restart |
 
 **Setup**
@@ -368,10 +369,8 @@ Lights set up in the BRMesh app already know the app's mesh key (its "phone key"
 
 1. Find the app's key, e.g. from a diagnostics download while the app sends a command: in the decoded control frames the zero padding reveals it (it was `34333739` in the first real setup).
 2. **Configure → Settings → Phone key**: enter the app's key.
-3. Press **Scan for devices**. Each light answers with a discovery broadcast and waits for a bind (discovery response). The integration binds every discovered light automatically (at most once a minute per light): new lights keep the mesh address they report (header byte 2) if it's free, known lights are bound back to the address Home Assistant stores.
-4. Stop using the app: opening it re-applies its own addresses. If that happens, a scan binds the lights back.
-
-**Bind all devices** is only needed for lights that don't answer a scan.
+3. Turn on **Auto-bind discovered lights** if Home Assistant should bind lights by itself, then press **Scan for devices**. Each light answers with a discovery broadcast and waits for a bind (discovery response). New lights keep the mesh address they report (header byte 2) if it's free. With auto-bind on, every discovered light is bound right away (at most once a minute per light), and known lights are bound back to the address Home Assistant stores. With it off, nothing is bound until **Bind all devices** is pressed; a log entry notes lights whose reported address differs.
+4. Stop using the app: opening it re-applies its own addresses. If that happens, a scan (with auto-bind on) or **Bind all devices** binds the lights back.
 
 With the app's key, heartbeats decode (header type 3, data subtype 4) and drive availability: the integration learns each light's heartbeat interval and marks it unavailable after 4 missed heartbeats (at least 5 minutes).
 

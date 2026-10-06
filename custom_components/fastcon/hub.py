@@ -104,6 +104,8 @@ class FastconHub:
         self._heartbeat_intervals: dict[str, deque[float]] = {}
         # Monotonic time of the last automatic bind per DID
         self._last_auto_bind: dict[str, float] = {}
+        # Bind discovered lights automatically; off unless the user turns it on
+        self.auto_bind = False
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
         # Sequence numbers of our own recent commands, to recognise relays of them
         self._sent_sequences: deque[int] = deque(maxlen=50)
@@ -111,6 +113,7 @@ class FastconHub:
     async def async_setup(self) -> None:
         """Load stored devices and start listening and sending."""
         stored = await self._store.async_load() or {}
+        self.auto_bind = stored.get("auto_bind", False)
         for data in stored.get("devices", []):
             device = FastconDevice(**data)
             self.devices[device.did] = device
@@ -189,6 +192,14 @@ class FastconHub:
         if last is not None and now - last < AUTO_BIND_COOLDOWN:
             return
         self._last_auto_bind[device.did] = now
+        if not self.auto_bind:
+            if reported_address and reported_address != device.mesh_address:
+                _LOGGER.info(
+                    "BRMesh %s reports mesh address %d but Home Assistant uses %d; "
+                    "turn on auto-bind or press 'Bind all devices'",
+                    device.name, reported_address, device.mesh_address,
+                )
+            return
         if reported_address and reported_address != device.mesh_address:
             _LOGGER.info(
                 "Binding BRMesh %s to mesh address %d (it reported %d)",
@@ -326,9 +337,20 @@ class FastconHub:
             self._async_save()
 
     @callback
+    def async_set_auto_bind(self, enabled: bool) -> None:
+        """Turn automatic binding of discovered lights on or off."""
+        self.auto_bind = enabled
+        self._last_auto_bind.clear()
+        self._async_save()
+
+    @callback
     def _async_save(self) -> None:
         self._store.async_delay_save(
-            lambda: {"devices": [asdict(d) for d in self.devices.values()]}, 1
+            lambda: {
+                "devices": [asdict(d) for d in self.devices.values()],
+                "auto_bind": self.auto_bind,
+            },
+            1,
         )
 
     @callback

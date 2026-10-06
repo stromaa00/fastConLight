@@ -28,11 +28,11 @@ Uses the Bluetooth adapter of the Home Assistant host, so no ESP32 is needed. Co
 1. HACS → ⋮ → **Custom repositories** → `https://github.com/stromaa00/fastConLight`, type **Integration**
 2. Install **BRMesh / Fastcon** and restart Home Assistant
 3. **Settings → Devices & Services → Add Integration → BRMesh / Fastcon**, pick the adapter and enter the phone key (default `A1A2A3A4`)
-4. Press **Scan for devices**. Discovered lights are added and bound automatically.
+4. Press **Scan for devices**, then **Bind all devices**. Or turn on **Auto-bind discovered lights** to have every light found by a scan bound automatically.
 
 Lights already set up in ESPHome can be added under the integration's **Configure → Add a light manually**.
 
-**Replacing the BRMesh app:** enter the app's mesh key as the phone key (**Configure → Settings**), press **Scan for devices**, and stop using the app. Discovered lights are bound automatically and keep their app address if it's free. Details: [SPECIFICATION.md §7.3](SPECIFICATION.md).
+**Replacing the BRMesh app:** enter the app's mesh key as the phone key (**Configure → Settings**), press **Scan for devices**, and stop using the app. New lights keep their app address if it's free; turn on **Auto-bind discovered lights** if Home Assistant should bind them itself. Details: [SPECIFICATION.md §7.3](SPECIFICATION.md).
 
 ---
 
