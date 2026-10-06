@@ -108,6 +108,8 @@ class FastconHub:
         self._heartbeat_intervals: dict[str, deque[float]] = {}
         # Monotonic time of the last automatic bind per DID
         self._last_auto_bind: dict[str, float] = {}
+        # Address a device had before the user changed it, to spot failed binds
+        self._previous_address: dict[str, int] = {}
         # Bind discovered lights automatically; off unless the user turns it on
         self.auto_bind = False
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
@@ -213,7 +215,7 @@ class FastconHub:
             _LOGGER.info(
                 "Binding BRMesh %s to mesh address %d", device.name, device.mesh_address
             )
-        self.async_bind(device)
+        self.async_bind(device, scan_first=False)
 
     def _record_broadcast(
         self, service_info: bluetooth.BluetoothServiceInfoBleak, payload: bytes
@@ -258,10 +260,26 @@ class FastconHub:
             None,
         )
         if device is None:
-            _LOGGER.debug(
-                "Heartbeat from %s for unknown mesh address %d", address, beat.mesh_address
-            )
+            if stale := next(
+                (
+                    d
+                    for did, old in self._previous_address.items()
+                    if old == beat.mesh_address and (d := self.devices.get(did))
+                ),
+                None,
+            ):
+                _LOGGER.warning(
+                    "BRMesh %s still reports its old mesh address %d instead of %d; "
+                    "the bind didn't arrive, press its Bind button again",
+                    stale.name, beat.mesh_address, stale.mesh_address,
+                )
+            else:
+                _LOGGER.debug(
+                    "Heartbeat from %s for unknown mesh address %d",
+                    address, beat.mesh_address,
+                )
             return
+        self._previous_address.pop(device.did, None)
         now = time.monotonic()
         if (last := self._last_heartbeat.get(device.did)) is not None and (
             now - last >= HEARTBEAT_BURST_GAP
@@ -366,8 +384,16 @@ class FastconHub:
         self._queue("scan", self._builder.scan)
 
     @callback
-    def async_bind(self, device: FastconDevice) -> None:
-        """Give a device its mesh address and the phone key."""
+    def async_bind(self, device: FastconDevice, scan_first: bool = True) -> None:
+        """Give a device its mesh address and the phone key.
+
+        A light only accepts a bind while it's in discovery mode, i.e. shortly
+        after a scan request (real data: binds to new addresses were ignored
+        unless a scan came just before). So send a scan right before the bind,
+        unless the light has just announced itself anyway (auto-bind).
+        """
+        if scan_first:
+            self._queue(f"bind-scan:{device.did}", self._builder.scan)
         self._queue(
             f"bind:{device.did}",
             lambda: self._builder.bind(
@@ -398,6 +424,7 @@ class FastconHub:
             _LOGGER.info(
                 "BRMesh %s: mesh address %d -> %d", device.name, device.mesh_address, address
             )
+            self._previous_address[device.did] = device.mesh_address
             device.mesh_address = address
             self._async_save()
             async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
