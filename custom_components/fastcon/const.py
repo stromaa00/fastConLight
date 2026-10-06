@@ -23,6 +23,10 @@ DEVICE_ADDRESS_PREFIX = "11:22:"
 UNAVAILABLE_AFTER = 300  # seconds, minimum
 MISSED_HEARTBEATS = 4
 MIN_HEARTBEAT_SAMPLES = 3
+
+# A light repeats its discovery broadcast many times a second after a scan;
+# bind it at most once per this many seconds.
+AUTO_BIND_COOLDOWN = 60  # seconds
 AVAILABILITY_CHECK_INTERVAL = 30  # seconds
 
 

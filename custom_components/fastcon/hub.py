@@ -21,6 +21,7 @@ from homeassistant.util import dt as dt_util
 
 from .advertiser import AdvertiseError, Advertiser
 from .const import (
+    AUTO_BIND_COOLDOWN,
     AVAILABILITY_CHECK_INTERVAL,
     CONF_ADAPTER,
     CONF_ADVERTISE_DURATION,
@@ -101,6 +102,8 @@ class FastconHub:
         self._unavailable: set[str] = set()
         self._last_heartbeat_time: dict[str, str] = {}
         self._heartbeat_intervals: dict[str, deque[float]] = {}
+        # Monotonic time of the last automatic bind per DID
+        self._last_auto_bind: dict[str, float] = {}
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
         # Sequence numbers of our own recent commands, to recognise relays of them
         self._sent_sequences: deque[int] = deque(maxlen=50)
@@ -155,50 +158,47 @@ class FastconHub:
         if (found := parse_broadcast(payload)) is None:
             return
         did = found.did.hex().upper()
-        if (device := self.devices.get(did)) is not None:
-            self._async_learn_address(device, found.mesh_address)
-            return
-        used = {d.mesh_address for d in self.devices.values()}
-        # Keep the address the device already has (e.g. from the BRMesh app),
-        # so it works without binding.
-        address = (
-            found.mesh_address
-            if found.mesh_address and found.mesh_address not in used
-            else self.next_free_address()
-        )
-        _LOGGER.info(
-            "Discovered BRMesh device %s (type %04X, mesh address %d)",
-            did, found.device_type, address,
-        )
-        self.async_add_device(
-            FastconDevice(
+        if (device := self.devices.get(did)) is None:
+            used = {d.mesh_address for d in self.devices.values()}
+            # Keep the address the device already has (e.g. from the BRMesh
+            # app) if it's free, so nothing else in the mesh has to change.
+            address = (
+                found.mesh_address
+                if found.mesh_address and found.mesh_address not in used
+                else self.next_free_address()
+            )
+            _LOGGER.info(
+                "Discovered BRMesh device %s (type %04X), mesh address %d",
+                did, found.device_type, address,
+            )
+            device = FastconDevice(
                 did=did,
                 device_type=found.device_type,
                 key=found.key.hex().upper(),
                 mesh_address=address,
             )
-        )
+            self.async_add_device(device)
+        # A discovered light waits for a bind (discovery response) to join
+        # the mesh, so answer it with the address Home Assistant manages.
+        self._async_auto_bind(device, found.mesh_address)
 
     @callback
-    def _async_learn_address(self, device: FastconDevice, address: int) -> None:
-        """Follow the mesh address a known device reports about itself."""
-        if not address or address == device.mesh_address:
+    def _async_auto_bind(self, device: FastconDevice, reported_address: int) -> None:
+        now = time.monotonic()
+        last = self._last_auto_bind.get(device.did)
+        if last is not None and now - last < AUTO_BIND_COOLDOWN:
             return
-        if other := next(
-            (d for d in self.devices.values() if d.mesh_address == address), None
-        ):
-            _LOGGER.warning(
-                "BRMesh %s reports mesh address %d, which %s also uses; "
-                "press 'Bind all devices' to give every light its own address",
-                device.name, address, other.name,
+        self._last_auto_bind[device.did] = now
+        if reported_address and reported_address != device.mesh_address:
+            _LOGGER.info(
+                "Binding BRMesh %s to mesh address %d (it reported %d)",
+                device.name, device.mesh_address, reported_address,
             )
-            return
-        _LOGGER.info(
-            "BRMesh %s now has mesh address %d (was %d)",
-            device.name, address, device.mesh_address,
-        )
-        device.mesh_address = address
-        self._async_save()
+        else:
+            _LOGGER.info(
+                "Binding BRMesh %s to mesh address %d", device.name, device.mesh_address
+            )
+        self.async_bind(device)
 
     def _record_broadcast(
         self, service_info: bluetooth.BluetoothServiceInfoBleak, payload: bytes
@@ -321,6 +321,7 @@ class FastconHub:
         if self.devices.pop(did, None) is not None:
             self._last_heartbeat.pop(did, None)
             self._heartbeat_intervals.pop(did, None)
+            self._last_auto_bind.pop(did, None)
             self._unavailable.discard(did)
             self._async_save()
 
