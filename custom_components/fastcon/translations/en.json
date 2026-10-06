@@ -66,11 +66,19 @@
       },
       "bind_all": {
         "name": "Bind all devices"
+      },
+      "bind": {
+        "name": "Bind"
       }
     },
     "switch": {
       "auto_bind": {
         "name": "Auto-bind discovered lights"
+      }
+    },
+    "number": {
+      "mesh_address": {
+        "name": "Mesh address"
       }
     }
   }

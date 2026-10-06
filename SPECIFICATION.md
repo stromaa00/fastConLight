@@ -345,6 +345,8 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 |--------|---------|
 | `button.<hub>_scan_for_devices` | Broadcasts the scan command |
 | `button.<hub>_bind_all_devices` | Sends a bind (discovery response) to every known device |
+| `number.brmesh_<name>_mesh_address` | The light's mesh address (1-255). Changing it binds the light to the new address; addresses used by another light are refused |
+| `button.brmesh_<name>_bind` | Binds just this light |
 | `switch.<hub>_auto_bind_discovered_lights` | When on, lights found by a scan are bound automatically (off by default, saved) |
 | `light.brmesh_<name>` | One per light; assumed state, restored after restart |
 

@@ -14,6 +14,7 @@ import time
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -35,6 +36,7 @@ from .const import (
     MISSED_HEARTBEATS,
     UNAVAILABLE_AFTER,
     signal_availability,
+    signal_device_updated,
     signal_new_device,
 )
 from .protocol import (
@@ -375,6 +377,31 @@ class FastconHub:
                 bytes.fromhex(device.key),
             ),
         )
+
+    @callback
+    def async_set_mesh_address(self, device: FastconDevice, address: int) -> None:
+        """Give a device a new mesh address and bind it so the light adopts it."""
+        if not 1 <= address <= 255:
+            raise ServiceValidationError(f"Mesh address {address} is not between 1 and 255")
+        if other := next(
+            (
+                d
+                for d in self.devices.values()
+                if d.mesh_address == address and d.did != device.did
+            ),
+            None,
+        ):
+            raise ServiceValidationError(
+                f"Mesh address {address} is already used by BRMesh {other.name}"
+            )
+        if address != device.mesh_address:
+            _LOGGER.info(
+                "BRMesh %s: mesh address %d -> %d", device.name, device.mesh_address, address
+            )
+            device.mesh_address = address
+            self._async_save()
+            async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
+        self.async_bind(device)
 
     @callback
     def async_bind_all(self) -> None:

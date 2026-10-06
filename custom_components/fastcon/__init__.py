@@ -10,7 +10,7 @@ from homeassistant.helpers import device_registry as dr
 from .const import DOMAIN
 from .hub import FastconHub
 
-PLATFORMS = [Platform.BUTTON, Platform.LIGHT, Platform.SWITCH]
+PLATFORMS = [Platform.BUTTON, Platform.LIGHT, Platform.NUMBER, Platform.SWITCH]
 
 type FastconConfigEntry = ConfigEntry[FastconHub]
 
