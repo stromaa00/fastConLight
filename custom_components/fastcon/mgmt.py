@@ -89,14 +89,16 @@ def ext_adv_data(instance: int, adv_data: bytes) -> bytes:
     return struct.pack("<BBB", instance, len(adv_data), 0) + adv_data
 
 
-def pick_instance(adv_features: bytes) -> int:
-    """Highest advertising instance not in use, from Read Advertising Features."""
-    _flags, _max_adv, _max_scan, max_instances, num = struct.unpack_from("<IBBBB", adv_features)
-    used = set(adv_features[8 : 8 + num])
-    for instance in range(max_instances, 0, -1):
-        if instance not in used:
-            return instance
-    raise MgmtError("no free advertising instance")
+def own_instance(adv_features: bytes) -> int:
+    """The advertising instance we use: the highest one the controller supports.
+
+    BlueZ hands out instances from 1 upwards, so the top one is normally free.
+    Always reusing it means a leftover advertisement is replaced, not leaked.
+    """
+    max_instances = struct.unpack_from("<IBBB", adv_features)[3]
+    if max_instances < 1:
+        raise MgmtError("controller supports no advertising instances")
+    return max_instances
 
 
 class _SockaddrHci(ctypes.Structure):
@@ -134,14 +136,31 @@ class MgmtAdvertiser:
         self._index = int(adapter.removeprefix("hci"))
         self._interval_ms = interval_ms
         self._sock: socket.socket | None = None
+        self._instance: int | None = None
         # Connectable first: it uses the adapter's public address. Non-connectable
         # needs a random address, which controllers refuse to set while Home
         # Assistant is scanning ("Opcode 0x2005 failed: -16").
         self._connectable_options = [True, False]
 
+    def _drain(self) -> None:
+        """Discard queued events.
+
+        The control socket receives every MGMT event, including a Device Found
+        for each advertisement Home Assistant sees while scanning. If they pile
+        up, the kernel can't queue our command's reply and the send fails with
+        ENOMEM ("Out of memory").
+        """
+        while True:
+            try:
+                if not self._sock.recv(512):
+                    return
+            except (BlockingIOError, InterruptedError):
+                return
+
     async def _request(self, opcode: int, params: bytes = b"") -> bytes:
         if self._sock is None:
             self._sock = _open_control_socket()
+        self._drain()
         loop = asyncio.get_running_loop()
         await loop.sock_sendall(
             self._sock, struct.pack("<HHH", opcode, self._index, len(params)) + params
@@ -165,8 +184,12 @@ class MgmtAdvertiser:
         """Advertise the payload for `duration` seconds."""
         adv = advertising_data(manufacturer_id, payload)
         errors: list[str] = []
+        if self._instance is None:
+            self._instance = own_instance(await self._request(MGMT_OP_READ_ADV_FEATURES))
+        instance = self._instance
         for i, connectable in enumerate(self._connectable_options):
-            instance = pick_instance(await self._request(MGMT_OP_READ_ADV_FEATURES))
+            # Clear anything left in our instance, e.g. after an earlier error.
+            await self._remove(instance, quiet=True)
             try:
                 await self._request(
                     MGMT_OP_ADD_EXT_ADV_PARAMS,
@@ -194,11 +217,18 @@ class MgmtAdvertiser:
             return
         raise MgmtError("; ".join(errors))
 
-    async def _remove(self, instance: int) -> None:
+    async def _remove(self, instance: int, quiet: bool = False) -> None:
         try:
             await self._request(MGMT_OP_REMOVE_ADVERTISING, bytes((instance,)))
         except (MgmtError, OSError, TimeoutError) as err:
-            _LOGGER.debug("Removing advertising instance %d failed: %s", instance, err)
+            # Invalid Parameters just means there was nothing to remove.
+            if quiet or getattr(err, "status", None) == 0x0D:
+                _LOGGER.debug("Removing advertising instance %d: %s", instance, err)
+            else:
+                _LOGGER.warning(
+                    "Could not stop advertising instance %d on hci%d: %s",
+                    instance, self._index, err,
+                )
 
     def close(self) -> None:
         """Close the MGMT socket."""

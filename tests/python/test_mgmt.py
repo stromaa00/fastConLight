@@ -45,15 +45,14 @@ class MgmtTest(unittest.TestCase):
         self.assertEqual(params[:3], bytes((3, 31, 0)))
         self.assertEqual(params[3:], adv)
 
-    def test_pick_instance_uses_highest_free(self):
+    def test_own_instance_is_highest_supported(self):
         features = struct.pack("<IBBBB", 0, 31, 31, 5, 2) + bytes((5, 1))
-        self.assertEqual(mgmt.pick_instance(features), 4)
+        self.assertEqual(mgmt.own_instance(features), 5)
 
-    def test_pick_instance_none_free(self):
-        features = struct.pack("<IBBBB", 0, 31, 31, 2, 2) + bytes((1, 2))
+    def test_own_instance_requires_support(self):
+        features = struct.pack("<IBBBB", 0, 31, 31, 0, 0)
         with self.assertRaises(mgmt.MgmtError):
-            mgmt.pick_instance(features)
-
+            mgmt.own_instance(features)
 
 if __name__ == "__main__":
     unittest.main()
