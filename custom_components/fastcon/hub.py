@@ -30,6 +30,7 @@ from .const import (
     DEFAULT_PHONE_KEY,
     DEVICE_ADDRESS_PREFIX,
     DOMAIN,
+    HEARTBEAT_BURST_GAP,
     MIN_HEARTBEAT_SAMPLES,
     MISSED_HEARTBEATS,
     UNAVAILABLE_AFTER,
@@ -258,7 +259,9 @@ class FastconHub:
             )
             return
         now = time.monotonic()
-        if (last := self._last_heartbeat.get(device.did)) is not None:
+        if (last := self._last_heartbeat.get(device.did)) is not None and (
+            now - last >= HEARTBEAT_BURST_GAP
+        ):
             self._heartbeat_intervals.setdefault(device.did, deque(maxlen=20)).append(
                 now - last
             )

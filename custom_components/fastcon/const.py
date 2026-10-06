@@ -23,6 +23,9 @@ DEVICE_ADDRESS_PREFIX = "11:22:"
 UNAVAILABLE_AFTER = 300  # seconds, minimum
 MISSED_HEARTBEATS = 4
 MIN_HEARTBEAT_SAMPLES = 3
+# Lights send heartbeats in bursts (several within a second, after activity).
+# Gaps shorter than this belong to one burst and don't count as an interval.
+HEARTBEAT_BURST_GAP = 60  # seconds
 
 # A light repeats its discovery broadcast many times a second after a scan;
 # bind it at most once per this many seconds.
