@@ -55,7 +55,9 @@ _LOGGER = logging.getLogger(__name__)
 # enable with logger.set_level: custom_components.fastcon.broadcasts: info
 _BROADCAST_LOGGER = logging.getLogger(f"{__package__}.broadcasts")
 
-RECENT_BROADCASTS = 200  # kept for the diagnostics download
+RECENT_BROADCASTS = 1000  # kept for the diagnostics download
+# All lights broadcast from this address
+LIGHT_BROADCAST_ADDRESS = "11:22:33:44:55:66"
 
 STORAGE_VERSION = 1
 
@@ -142,6 +144,18 @@ class FastconHub:
                 bluetooth.BluetoothScanningMode.ACTIVE,
             )
         )
+        # Everything else the lights broadcast (other manufacturer data, names,
+        # service data), so the log shows all that comes back from them.
+        self.entry.async_on_unload(
+            bluetooth.async_register_callback(
+                self.hass,
+                self._async_on_light_address,
+                bluetooth.BluetoothCallbackMatcher(
+                    address=LIGHT_BROADCAST_ADDRESS, connectable=False
+                ),
+                bluetooth.BluetoothScanningMode.ACTIVE,
+            )
+        )
         self.entry.async_create_background_task(
             self.hass, self._async_send_loop(), f"{DOMAIN} sender"
         )
@@ -163,12 +177,14 @@ class FastconHub:
         service_info: bluetooth.BluetoothServiceInfoBleak,
         change: bluetooth.BluetoothChange,
     ) -> None:
-        if not service_info.address.upper().startswith(DEVICE_ADDRESS_PREFIX):
-            return
         payload = service_info.manufacturer_data.get(MANUFACTURER_ID)
         if payload is None:
             return
+        # Log every BRMesh broadcast, including ones sent directly by a phone
+        # app or remote from their own address, but only act on the lights'.
         self._record_broadcast(service_info, payload)
+        if not service_info.address.upper().startswith(DEVICE_ADDRESS_PREFIX):
+            return
         if (beat := parse_heartbeat(payload, self.phone_key)) is not None:
             self._async_on_heartbeat(service_info.address, beat)
             return
@@ -233,6 +249,34 @@ class FastconHub:
                 "Binding BRMesh %s to mesh address %d", device.name, device.mesh_address
             )
         self.async_bind(device, pending=False)
+
+    @callback
+    def _async_on_light_address(
+        self,
+        service_info: bluetooth.BluetoothServiceInfoBleak,
+        change: bluetooth.BluetoothChange,
+    ) -> None:
+        """Log advertisement content from the lights other than BRMesh frames."""
+        other = {
+            f"0x{company:04X}": data.hex()
+            for company, data in service_info.manufacturer_data.items()
+            if company != MANUFACTURER_ID
+        }
+        if not (other or service_info.service_data or service_info.name not in ("", None, service_info.address)):
+            return
+        record = {
+            "time": dt_util.utcnow().isoformat(),
+            "direction": "received",
+            "action": "other advertisement content from the lights",
+            "address": service_info.address,
+            "rssi": service_info.rssi,
+            "name": service_info.name,
+            "manufacturer_data": other,
+            "service_data": {k: v.hex() for k, v in service_info.service_data.items()},
+            "service_uuids": list(service_info.service_uuids),
+        }
+        self.recent_broadcasts.append(record)
+        _BROADCAST_LOGGER.info("other advertisement content from %s: %s", service_info.address, record)
 
     def _record_broadcast(
         self, service_info: bluetooth.BluetoothServiceInfoBleak, payload: bytes
