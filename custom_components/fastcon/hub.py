@@ -98,6 +98,8 @@ class FastconHub:
         self._unavailable: set[str] = set()
         self._last_heartbeat_time: dict[str, str] = {}
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
+        # Sequence numbers of our own recent commands, to recognise relays of them
+        self._sent_sequences: deque[int] = deque(maxlen=50)
 
     async def async_setup(self) -> None:
         """Load stored devices and start listening and sending."""
@@ -166,25 +168,30 @@ class FastconHub:
     ) -> None:
         info = describe_broadcast(payload, self.phone_key)
         beat = parse_heartbeat(payload, self.phone_key)
-        mesh = beat.mesh_address if beat else None
+        mesh = beat.mesh_address if beat else info.get("mesh_address")
         device = next(
             (d for d in self.devices.values() if mesh is not None and d.mesh_address == mesh),
             None,
         )
+        own = info["kind"] == "control" and info.get("sequence") in self._sent_sequences
         record = {
             "time": dt_util.utcnow().isoformat(),
             "address": service_info.address,
             "rssi": service_info.rssi,
+            **info,
             "mesh_address": mesh,
             "light": device.name if device else None,
+            "own_command": own,
             "raw": payload.hex(),
-            **info,
         }
         self.recent_broadcasts.append(record)
         _BROADCAST_LOGGER.info(
-            "%s from %s rssi=%s seq=%d mesh=%s light=%s checksum=%s data=%s raw=%s",
-            info["kind"], service_info.address, service_info.rssi, info.get("sequence", -1),
-            mesh, record["light"], info.get("checksum_ok"), info.get("data"), record["raw"],
+            "%s%s from %s rssi=%s seq=%s mesh=%s light=%s command=%s checksum=%s "
+            "data=%s raw=%s",
+            info["kind"], " (relay of our command)" if own else "",
+            service_info.address, service_info.rssi, info.get("sequence"), mesh,
+            record["light"], info.get("command"), info.get("checksum_ok"),
+            info.get("data"), record["raw"],
         )
 
     def last_heartbeat_time(self, did: str) -> str | None:
@@ -308,6 +315,7 @@ class FastconHub:
             while self._pending:
                 key = next(iter(self._pending))
                 payload = self._pending.pop(key)()
+                self._sent_sequences.append(self._builder.last_sequence)
                 _LOGGER.debug("Sending %s: %s", key, payload.hex())
                 try:
                     await self._advertiser.advertise(

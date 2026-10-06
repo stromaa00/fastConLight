@@ -34,8 +34,8 @@ def decode(packet: bytes, key: bytes | None):
 
 
 class ProtocolTest(unittest.TestCase):
-    def test_crc_matches_ccitt_false(self):
-        self.assertEqual(protocol.crc16(b"", b"123456789"), 0x29B1)
+    def test_crc_is_x25(self):
+        self.assertEqual(protocol.crc16(b"", b"123456789"), 0x906E)
 
     def test_whitening_is_its_own_inverse(self):
         data = bytearray(range(40))
@@ -136,6 +136,31 @@ class ProtocolTest(unittest.TestCase):
         payload = bytes.fromhex("4E6C7A79EC0BF10A52F2A1A85E367BC4")
         info = protocol.describe_broadcast(payload, bytes.fromhex("A1A2A3A4"))
         self.assertEqual(info["kind"], "discovery")
+
+    # Relayed commands captured from real lights (diagnostics, 2026-10-06)
+    RELAYED = {
+        "6db64368931dddaf07391bad876f9a5ed20755f7cb6b38db": (170, 7, "00"),
+        "6db64368931ddda907381bae876f9a5ed20755f7cb6bcb98": (172, 4, "00"),
+        "6db64368931ddda807f64bae746f9a5ead7855f7cb6ba879": (173, 4, "f3000000" "7f7f"),
+    }
+
+    def test_describe_relayed_commands_from_real_lights(self):
+        key = bytes.fromhex("A1A2A3A4")
+        for raw, (seq, mesh, command) in self.RELAYED.items():
+            info = protocol.describe_broadcast(bytes.fromhex(raw), key)
+            self.assertEqual(info["frame"], "rf")
+            self.assertEqual(info["kind"], "control")
+            self.assertTrue(info["checksum_ok"])
+            self.assertEqual(info["sequence"], seq)
+            self.assertEqual(info["mesh_address"], mesh)
+            self.assertEqual(info["command"], command)
+
+    def test_our_command_unwraps_to_same_body(self):
+        key = bytes.fromhex("A1A2A3A4")
+        packet = protocol.CommandBuilder(169).light(7, key, protocol.light_off())
+        info = protocol.describe_broadcast(packet, key)
+        self.assertEqual((info["kind"], info["sequence"], info["mesh_address"]), ("control", 170, 7))
+        self.assertEqual(packet.hex(), "6db64368931dddaf07391bad876f9a5ed20755f7cb6b38db")
 
 
 if __name__ == "__main__":

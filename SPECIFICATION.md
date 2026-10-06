@@ -157,10 +157,11 @@ BRMesh packets are 31 bytes and fit a legacy (Bluetooth 4.x) advertisement, whic
 
 ### 4.4 CRC Calculation
 
-- **Polynomial:** `0x1021`
-- **Initial Value:** `0xFFFF`
+- **Algorithm:** CRC-16/X-25 (polynomial `0x1021` reflected, initial value `0xFFFF`, final XOR `0xFFFF`)
 - **Input:** Address bytes + data bytes
-- **Output:** 16-bit CRC appended to payload
+- **Output:** 16-bit CRC appended to payload, low byte first
+
+Confirmed from commands relayed by real lights (October 2026). The ESP32 firmware (Arduino and ESPHome) uses CRC-16/CCITT-FALSE (not reflected, no final XOR) instead; lights accept those frames too, so they apparently don't check the CRC, but the HA integration now sends exactly what the lights produce.
 
 ### 4.5 BLE Command Structure
 
@@ -776,7 +777,7 @@ esphome compile fastcon-esp32.yaml --verbose
 
 ### 11.3 Protocol Limitations
 
-- **L-013:** Lights only receive broadcast commands (no state feedback)
+- **L-013:** Lights don't report their state. They relay every command with the forward bit set (from address `11:22:33:44:55:66`, as a whitened 24-byte frame), so commands from a remote or the app could be observed, but no heartbeats have been seen
 - **L-014:** State reported in Home Assistant may not reflect actual light state
 - **L-015:** Commands may be lost (~80% reliability without redundancy)
 

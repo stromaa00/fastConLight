@@ -56,14 +56,18 @@ def reverse_8(value: int) -> int:
 
 
 def crc16(addr: bytes, data: bytes) -> int:
-    """CRC-16/CCITT (poly 0x1021, init 0xFFFF) over address + data."""
+    """CRC-16/X-25 (poly 0x1021 reflected, init 0xFFFF, xorout 0xFFFF) over address + data.
+
+    This is what real lights put on the frames they relay. The ESP32 firmware
+    used CRC-16/CCITT-FALSE instead; lights accepted that too, but matching
+    their own frames is safer.
+    """
     crc = 0xFFFF
     for byte in bytes(addr) + bytes(data):
-        crc ^= byte << 8
+        crc ^= byte
         for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) if crc & 0x8000 else (crc << 1)
-            crc &= 0xFFFF
-    return crc
+            crc = (crc >> 1) ^ 0x8408 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFF
 
 
 def whiten(data: bytearray, seed: int = WHITENING_SEED) -> None:
@@ -169,6 +173,11 @@ class CommandBuilder:
         self._sequence += 1
         if self._sequence >= 256:
             self._sequence = 1
+        return self._sequence
+
+    @property
+    def last_sequence(self) -> int:
+        """Sequence number of the most recently built command."""
         return self._sequence
 
     def generate(
@@ -291,6 +300,7 @@ def parse_heartbeat(payload: bytes, phone_key: bytes) -> Heartbeat | None:
     4, byte 1 the mesh address and byte 2 the group address. The checksum
     (header byte 3) confirms the phone key is right.
     """
+    payload = unwrap_rf_frame(payload) or payload
     if len(payload) < 16:
         return None
     header = bytes(b ^ DEFAULT_ENCRYPT_KEY[i] for i, b in enumerate(payload[:4]))
@@ -307,15 +317,37 @@ def parse_heartbeat(payload: bytes, phone_key: bytes) -> Heartbeat | None:
     )
 
 
+def unwrap_rf_frame(payload: bytes) -> bytes | None:
+    """Return the Fastcon body of a whitened RF frame, or None if it isn't one.
+
+    Lights relay commands in the same 24-byte form we send them: header
+    71 0F 55, the Fastcon address, a 16-byte body and a CRC, all whitened.
+    """
+    if len(payload) != 24:
+        return None
+    buf = bytearray(0x0F) + bytearray(payload)
+    whiten(buf)
+    frame = buf[0x0F:]
+    if bytes(reverse_8(b) for b in frame[:3]) != b"\x71\x0f\x55":
+        return None
+    return bytes(frame[6:22])
+
+
 def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
     """Decode the generic body fields of any BRMesh broadcast, for logging."""
+    body = unwrap_rf_frame(payload)
+    frame = "rf" if body is not None else "plain"
+    payload = body or payload
     if len(payload) < 4:
-        return {"kind": "too short"}
+        return {"kind": "too short", "frame": frame}
     header = bytes(b ^ DEFAULT_ENCRYPT_KEY[i] for i, b in enumerate(payload[:4]))
     content = bytes(b ^ phone_key[i & 3] for i, b in enumerate(payload[4:]))
     header_type = (header[0] >> 4) & 7
     info = {
-        "kind": {1: "discovery", 3: "status"}.get(header_type, "unknown"),
+        "kind": {1: "discovery", 2: "bind", 3: "status", 5: "control"}.get(
+            header_type, "unknown"
+        ),
+        "frame": frame,
         "header_type": header_type,
         "forward": bool(header[0] & 0x80),
         "address_high": header[0] & 0x0F,
@@ -328,4 +360,9 @@ def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
         info["subtype"] = content[0] & 0x0F
         if info["subtype"] == 4:
             info["kind"] = "heartbeat"
+    if header_type == 5 and info["checksum_ok"] and len(content) >= 2:
+        # Single control: data[0] = 2 | (len + 1) << 4, data[1] = mesh address
+        length = (content[0] >> 4) - 1
+        info["mesh_address"] = content[1] | (info["address_high"] << 8)
+        info["command"] = content[2 : 2 + max(length, 0)].hex()
     return info
