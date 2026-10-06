@@ -162,6 +162,19 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual((info["kind"], info["sequence"], info["mesh_address"]), ("control", 170, 7))
         self.assertEqual(packet.hex(), "6db64368931dddaf07391bad876f9a5ed20755f7cb6b38db")
 
+    def test_discovery_reports_mesh_address(self):
+        # Same light (533B) before and after the BRMesh app changed its address
+        before = protocol.parse_broadcast(bytes.fromhex("4e6c7fceec0bf10a533ba1a85e367bc4"))
+        after = protocol.parse_broadcast(bytes.fromhex("4e6d72d4ec0bf10a533ba1a85e367bc4"))
+        self.assertEqual((before.mesh_address, after.mesh_address), (4, 9))
+
+    def test_heartbeat_with_app_key_from_real_light(self):
+        # Captured heartbeat, encrypted with the BRMesh app's key
+        raw = bytes.fromhex("6eb67248403a373d30063d3634333739")
+        beat = protocol.parse_heartbeat(raw, bytes.fromhex("34333739"))
+        self.assertEqual(beat, protocol.Heartbeat(mesh_address=9, group_address=0))
+        self.assertIsNone(protocol.parse_heartbeat(raw, bytes.fromhex("A1A2A3A4")))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,7 @@ async def async_get_config_entry_diagnostics(
                 "name": device.name,
                 "available": hub.is_available(device.did),
                 "last_heartbeat": hub.last_heartbeat_time(device.did),
+                "heartbeat_interval": hub.heartbeat_interval(device.did),
             }
             for device in hub.devices.values()
         ],

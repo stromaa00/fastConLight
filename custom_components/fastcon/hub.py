@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 import logging
+import statistics
 import time
 
 from homeassistant.components import bluetooth
@@ -28,6 +29,8 @@ from .const import (
     DEFAULT_PHONE_KEY,
     DEVICE_ADDRESS_PREFIX,
     DOMAIN,
+    MIN_HEARTBEAT_SAMPLES,
+    MISSED_HEARTBEATS,
     UNAVAILABLE_AFTER,
     signal_availability,
     signal_new_device,
@@ -97,6 +100,7 @@ class FastconHub:
         self._last_heartbeat: dict[str, float] = {}
         self._unavailable: set[str] = set()
         self._last_heartbeat_time: dict[str, str] = {}
+        self._heartbeat_intervals: dict[str, deque[float]] = {}
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
         # Sequence numbers of our own recent commands, to recognise relays of them
         self._sent_sequences: deque[int] = deque(maxlen=50)
@@ -151,17 +155,50 @@ class FastconHub:
         if (found := parse_broadcast(payload)) is None:
             return
         did = found.did.hex().upper()
-        if did in self.devices:
+        if (device := self.devices.get(did)) is not None:
+            self._async_learn_address(device, found.mesh_address)
             return
-        _LOGGER.info("Discovered BRMesh device %s (type %04X)", did, found.device_type)
+        used = {d.mesh_address for d in self.devices.values()}
+        # Keep the address the device already has (e.g. from the BRMesh app),
+        # so it works without binding.
+        address = (
+            found.mesh_address
+            if found.mesh_address and found.mesh_address not in used
+            else self.next_free_address()
+        )
+        _LOGGER.info(
+            "Discovered BRMesh device %s (type %04X, mesh address %d)",
+            did, found.device_type, address,
+        )
         self.async_add_device(
             FastconDevice(
                 did=did,
                 device_type=found.device_type,
                 key=found.key.hex().upper(),
-                mesh_address=self.next_free_address(),
+                mesh_address=address,
             )
         )
+
+    @callback
+    def _async_learn_address(self, device: FastconDevice, address: int) -> None:
+        """Follow the mesh address a known device reports about itself."""
+        if not address or address == device.mesh_address:
+            return
+        if other := next(
+            (d for d in self.devices.values() if d.mesh_address == address), None
+        ):
+            _LOGGER.warning(
+                "BRMesh %s reports mesh address %d, which %s also uses; "
+                "press 'Bind all devices' to give every light its own address",
+                device.name, address, other.name,
+            )
+            return
+        _LOGGER.info(
+            "BRMesh %s now has mesh address %d (was %d)",
+            device.name, address, device.mesh_address,
+        )
+        device.mesh_address = address
+        self._async_save()
 
     def _record_broadcast(
         self, service_info: bluetooth.BluetoothServiceInfoBleak, payload: bytes
@@ -211,6 +248,9 @@ class FastconHub:
             return
         now = time.monotonic()
         if (last := self._last_heartbeat.get(device.did)) is not None:
+            self._heartbeat_intervals.setdefault(device.did, deque(maxlen=20)).append(
+                now - last
+            )
             _LOGGER.debug(
                 "Heartbeat from %s (mesh %d) via %s, %.0f s after the previous one",
                 device.name, beat.mesh_address, address, now - last,
@@ -227,16 +267,33 @@ class FastconHub:
         now = time.monotonic()
         changed = False
         for did, last in self._last_heartbeat.items():
-            if did not in self._unavailable and now - last > UNAVAILABLE_AFTER:
+            if did in self._unavailable or (timeout := self._heartbeat_timeout(did)) is None:
+                continue
+            if now - last > timeout:
                 self._unavailable.add(did)
                 changed = True
                 if device := self.devices.get(did):
                     _LOGGER.info(
-                        "No heartbeat from BRMesh %s for %d s; marking it unavailable",
-                        device.name, UNAVAILABLE_AFTER,
+                        "No heartbeat from BRMesh %s for %.0f s; marking it unavailable",
+                        device.name, now - last,
                     )
         if changed:
             self._async_availability_changed()
+
+    def _heartbeat_timeout(self, did: str) -> float | None:
+        """Seconds without a heartbeat before a light counts as offline.
+
+        None until enough heartbeats were seen to know the light's interval.
+        """
+        intervals = self._heartbeat_intervals.get(did)
+        if not intervals or len(intervals) < MIN_HEARTBEAT_SAMPLES:
+            return None
+        return max(UNAVAILABLE_AFTER, MISSED_HEARTBEATS * statistics.median(intervals))
+
+    def heartbeat_interval(self, did: str) -> float | None:
+        """Median seconds between heartbeats, if known."""
+        intervals = self._heartbeat_intervals.get(did)
+        return statistics.median(intervals) if intervals else None
 
     @callback
     def _async_availability_changed(self) -> None:
@@ -263,6 +320,7 @@ class FastconHub:
         """Forget a device."""
         if self.devices.pop(did, None) is not None:
             self._last_heartbeat.pop(did, None)
+            self._heartbeat_intervals.pop(did, None)
             self._unavailable.discard(did)
             self._async_save()
 

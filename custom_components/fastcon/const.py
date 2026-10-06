@@ -18,9 +18,11 @@ DEFAULT_ADVERTISE_DURATION = 3.0
 DEVICE_ADDRESS_PREFIX = "11:22:"
 
 
-# A light is marked unavailable when no heartbeat arrived for this long, but
-# only once at least one heartbeat has been seen from it.
-UNAVAILABLE_AFTER = 300  # seconds
+# A light is marked unavailable after missing several heartbeats. The interval
+# is learned per light; until enough heartbeats were seen, it stays available.
+UNAVAILABLE_AFTER = 300  # seconds, minimum
+MISSED_HEARTBEATS = 4
+MIN_HEARTBEAT_SAMPLES = 3
 AVAILABILITY_CHECK_INTERVAL = 30  # seconds
 
 

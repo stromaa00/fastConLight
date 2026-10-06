@@ -32,6 +32,8 @@ Uses the Bluetooth adapter of the Home Assistant host, so no ESP32 is needed. Co
 
 Lights already set up in ESPHome can be added under the integration's **Configure → Add a light manually**.
 
+**Replacing the BRMesh app:** enter the app's mesh key as the phone key (**Configure → Settings**), press **Scan for devices**, and stop using the app. The integration adopts the mesh address each light reports. Details: [SPECIFICATION.md §7.3](SPECIFICATION.md).
+
 ---
 
 ## Quick Start (ESPHome)

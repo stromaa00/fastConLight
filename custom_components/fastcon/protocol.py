@@ -258,6 +258,9 @@ class DiscoveredDevice:
     did: bytes
     device_type: int
     key: bytes
+    # Mesh address the device currently has (0 if unbound). Header byte 2 of
+    # every broadcast carries the sender's address.
+    mesh_address: int = 0
 
     @property
     def name(self) -> str:
@@ -270,6 +273,8 @@ def parse_broadcast(payload: bytes) -> DiscoveredDevice | None:
 
     Layout of a discovery broadcast (16 bytes):
       header(4, encrypted) | DID(6, last 2 = name) | type(2, little endian) | key(4)
+
+    Decrypted header byte 2 is the device's current mesh address.
     """
     if len(payload) < 16:
         return None
@@ -280,6 +285,7 @@ def parse_broadcast(payload: bytes) -> DiscoveredDevice | None:
         did=bytes(payload[4:10]),
         device_type=payload[10] | (payload[11] << 8),
         key=bytes(payload[12:16]),
+        mesh_address=payload[2] ^ DEFAULT_ENCRYPT_KEY[2],
     )
 
 

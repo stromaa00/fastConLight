@@ -362,6 +362,18 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 - In discovery broadcasts the 6-byte DID is at payload bytes 4-9 (the last 2 bytes are the name), the type at 10-11 (little endian) and the key at 12-15.
 - Colour temperature is not mapped yet; CCT lights get brightness only.
 
+**Replacing the BRMesh app**
+
+Lights set up in the BRMesh app already know the app's mesh key (its "phone key"). Entering that key in the integration lets Home Assistant take over without resetting the lights:
+
+1. Find the app's key, e.g. from a diagnostics download while the app sends a command: in the decoded control frames the zero padding reveals it (it was `34333739` in the first real setup).
+2. **Configure → Settings → Phone key**: enter the app's key.
+3. Press **Scan for devices**. Each light reports its current mesh address in header byte 2 of its broadcasts; the integration adopts it for new lights and follows changes for known ones.
+4. Press **Bind all devices** once if two lights report the same address.
+5. Stop using the app: opening it re-applies its own addresses.
+
+With the app's key, heartbeats decode (header type 3, data subtype 4) and drive availability: the integration learns each light's heartbeat interval and marks it unavailable after 4 missed heartbeats (at least 5 minutes).
+
 ### 7.4 Device Identification
 
 Each device has a unique identifier:
@@ -777,7 +789,7 @@ esphome compile fastcon-esp32.yaml --verbose
 
 ### 11.3 Protocol Limitations
 
-- **L-013:** Lights don't report their state. They relay every command with the forward bit set (from address `11:22:33:44:55:66`, as a whitened 24-byte frame), so commands from a remote or the app could be observed, but no heartbeats have been seen
+- **L-013:** Lights don't report their on/off/brightness state. They relay every command with the forward bit set (from address `11:22:33:44:55:66`, as a whitened 24-byte frame) and send heartbeats encrypted with the mesh key, which only tell that a light is powered
 - **L-014:** State reported in Home Assistant may not reflect actual light state
 - **L-015:** Commands may be lost (~80% reliability without redundancy)
 
