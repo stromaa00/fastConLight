@@ -362,6 +362,9 @@ def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
         "checksum_ok": (sum(header[:3]) + sum(content)) & 0xFF == header[3],
         "data": content.hex(),
     }
+    if header_type == 1 and len(payload) >= 16:
+        info["discovered_light"] = payload[8:10].hex().upper()
+        info["reported_address"] = header[2]
     if header_type == 3 and content:
         info["subtype"] = content[0] & 0x0F
         if info["subtype"] == 4:
@@ -371,4 +374,66 @@ def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
         length = (content[0] >> 4) - 1
         info["mesh_address"] = content[1] | (info["address_high"] << 8)
         info["command"] = content[2 : 2 + max(length, 0)].hex()
+        info["control_type"] = content[0] & 0x0F
     return info
+
+
+def _percent(level: int) -> int:
+    return round((level & 0x7F) * 100 / 127)
+
+
+def describe_command(command: bytes) -> str:
+    """Human-readable meaning of a single control command's bytes."""
+    if not command:
+        return "empty command"
+    first = command[0]
+    on = bool(first & 0x80)
+    if len(command) == 1:
+        if first == 0:
+            return "light off"
+        if on:
+            level = first & 0x7F
+            return f"light on, brightness {_percent(level)}%" if level else "light on"
+        return f"brightness {_percent(first)}%"
+    if len(command) >= 6:
+        blue, red, green, warm, cold = command[1:6]
+        brightness = f"brightness {_percent(first)}%"
+        if not on and not first:
+            return "light off"
+        if (red or green or blue) and not (warm or cold):
+            return f"color RGB({red}, {green}, {blue}), {brightness}"
+        if (warm or cold) and not (red or green or blue):
+            return f"white, {brightness}"
+        if not (red or green or blue or warm or cold):
+            return f"light on, {brightness}"
+        return f"color RGB({red}, {green}, {blue}) + white ({warm}, {cold}), {brightness}"
+    return f"command {command.hex()}"
+
+
+def describe_action(info: dict) -> str:
+    """Best guess at what a decoded broadcast means, for logs and diagnostics."""
+    kind = info.get("kind")
+    if kind == "discovery":
+        return (
+            f"discovery: {info.get('discovered_light', '?')} announces itself "
+            f"(reports mesh address {info.get('reported_address', '?')})"
+        )
+    if kind == "heartbeat":
+        if info.get("checksum_ok"):
+            return f"heartbeat from mesh address {info.get('header_mesh', '?')}"
+        return "heartbeat (other key, can't decode)"
+    if kind == "status":
+        if not info.get("checksum_ok"):
+            return "status (other key, can't decode)"
+        return f"status, subtype {info.get('subtype')}"
+    if kind == "bind":
+        return "bind (discovery response)"
+    if kind == "control":
+        if not info.get("checksum_ok"):
+            return "control command (other key, can't decode)"
+        if info.get("control_type") == 2:
+            return describe_command(bytes.fromhex(info.get("command", "")))
+        return f"control type {info.get('control_type')}: {info.get('data')}"
+    if info.get("header_type") == 0:
+        return "scan request"
+    return f"unknown broadcast (type {info.get('header_type')})"

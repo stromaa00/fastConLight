@@ -41,6 +41,7 @@ from .protocol import (
     MANUFACTURER_ID,
     CommandBuilder,
     Heartbeat,
+    describe_action,
     describe_broadcast,
     parse_broadcast,
     parse_heartbeat,
@@ -223,8 +224,12 @@ class FastconHub:
             None,
         )
         own = info["kind"] == "control" and info.get("sequence") in self._sent_sequences
+        action = describe_action({**info, "header_mesh": mesh})
+        if info["kind"] == "control" and info.get("checksum_ok"):
+            action += " (sent by Home Assistant)" if own else " (from another controller)"
         record = {
             "time": dt_util.utcnow().isoformat(),
+            "action": action,
             "address": service_info.address,
             "rssi": service_info.rssi,
             **info,
@@ -235,12 +240,9 @@ class FastconHub:
         }
         self.recent_broadcasts.append(record)
         _BROADCAST_LOGGER.info(
-            "%s%s from %s rssi=%s seq=%s mesh=%s light=%s command=%s checksum=%s "
-            "data=%s raw=%s",
-            info["kind"], " (relay of our command)" if own else "",
-            service_info.address, service_info.rssi, info.get("sequence"), mesh,
-            record["light"], info.get("command"), info.get("checksum_ok"),
-            info.get("data"), record["raw"],
+            "%s | light=%s mesh=%s rssi=%s seq=%s raw=%s",
+            action, record["light"], mesh, service_info.rssi, info.get("sequence"),
+            record["raw"],
         )
 
     def last_heartbeat_time(self, did: str) -> str | None:

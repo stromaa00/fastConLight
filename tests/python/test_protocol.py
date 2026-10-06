@@ -175,6 +175,36 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(beat, protocol.Heartbeat(mesh_address=9, group_address=0))
         self.assertIsNone(protocol.parse_heartbeat(raw, bytes.fromhex("A1A2A3A4")))
 
+    def test_describe_command(self):
+        cases = {
+            "00": "light off",
+            "80": "light on",
+            "f2": "light on, brightness 90%",
+            "ff5555550000": "color RGB(85, 85, 85), brightness 100%",
+            "a20000007f7f": "white, brightness 27%",
+            "ff00ff000000": "color RGB(255, 0, 0), brightness 100%",
+        }
+        for command, expected in cases.items():
+            self.assertEqual(protocol.describe_command(bytes.fromhex(command)), expected)
+
+    def test_describe_action_from_real_broadcasts(self):
+        key = bytes.fromhex("A1A2A3A4")
+        def action(raw, **extra):
+            info = protocol.describe_broadcast(bytes.fromhex(raw), key)
+            return protocol.describe_action({**info, **extra})
+        self.assertEqual(
+            action("6db64368931ddd7607254bae783acf0bd20755f7cb6b9979"),
+            "color RGB(85, 85, 85), brightness 100%",
+        )
+        self.assertEqual(
+            action("4e6c7625ec0bf10a7edea1a85e367bc4"),
+            "discovery: 7EDE announces itself (reports mesh address 13)",
+        )
+        self.assertEqual(
+            action("6e587fb4d5a6a3a0a597a9aba1a2a3a4", header_mesh=4),
+            "heartbeat from mesh address 4",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
