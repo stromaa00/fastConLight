@@ -833,7 +833,9 @@ esphome compile fastcon-esp32.yaml --verbose
 - ✅ Lights discovered and added automatically
 - ✅ Bind all devices
 - ✅ Lights respond to commands from Home Assistant
-- ⏳ Brightness, RGB and white individually confirmed
+- ✅ Brightness, RGB and white individually confirmed
+- ✅ All 7 lights replace the BRMesh app: binding from Home Assistant sets both the mesh address and the phone key (heartbeats afterwards come from Home Assistant's addresses, encrypted with its key)
+- ⚠️ Binds don't always arrive the first time for weak lights (about −85 to −90 dBm); pressing **Bind all devices** again fixed it
 - ⏳ Behaviour after host reboot
 
 Problems found and fixed on the way: BlueZ D-Bus rejects the 31-byte packet (`Invalid Parameters`); non-connectable advertising needs a random address the controller refuses while scanning (`Opcode 0x2005 failed: -16`); unread MGMT events filled the socket buffer (`ENOMEM`).
