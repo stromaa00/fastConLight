@@ -272,3 +272,36 @@ def parse_broadcast(payload: bytes) -> DiscoveredDevice | None:
         device_type=payload[10] | (payload[11] << 8),
         key=bytes(payload[12:16]),
     )
+
+
+@dataclass(frozen=True)
+class Heartbeat:
+    """Periodic broadcast from a bound device."""
+
+    mesh_address: int
+    group_address: int
+
+
+def parse_heartbeat(payload: bytes, phone_key: bytes) -> Heartbeat | None:
+    """Parse a heartbeat broadcast (the bytes after the 0xFFF0 company ID).
+
+    Same body layout as our commands: header(4) encrypted with the default key,
+    then data encrypted with the phone key. Header type is 3 and the low nibble
+    of byte 0 holds the high bits of the mesh address; data byte 0 has subtype
+    4, byte 1 the mesh address and byte 2 the group address. The checksum
+    (header byte 3) confirms the phone key is right.
+    """
+    if len(payload) < 16:
+        return None
+    header = bytes(b ^ DEFAULT_ENCRYPT_KEY[i] for i, b in enumerate(payload[:4]))
+    if (header[0] >> 4) & 7 != 3:
+        return None
+    content = bytes(b ^ phone_key[i & 3] for i, b in enumerate(payload[4:]))
+    if (sum(header[:3]) + sum(content)) & 0xFF != header[3]:
+        return None
+    if content[0] & 0x0F != 4:
+        return None
+    return Heartbeat(
+        mesh_address=content[1] | ((header[0] & 0x0F) << 8),
+        group_address=content[2],
+    )

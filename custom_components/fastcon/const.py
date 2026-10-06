@@ -18,6 +18,17 @@ DEFAULT_ADVERTISE_DURATION = 3.0
 DEVICE_ADDRESS_PREFIX = "11:22:"
 
 
+# A light is marked unavailable when no heartbeat arrived for this long, but
+# only once at least one heartbeat has been seen from it.
+UNAVAILABLE_AFTER = 300  # seconds
+AVAILABILITY_CHECK_INTERVAL = 30  # seconds
+
+
+def signal_availability(entry_id: str) -> str:
+    """Dispatcher signal sent when a device's availability changes."""
+    return f"{DOMAIN}_availability_{entry_id}"
+
+
 def signal_new_device(entry_id: str) -> str:
     """Dispatcher signal sent when a device is added to a hub."""
     return f"{DOMAIN}_new_device_{entry_id}"

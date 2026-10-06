@@ -99,6 +99,32 @@ class ProtocolTest(unittest.TestCase):
     def test_rgb_handles_black(self):
         self.assertEqual(protocol.light_rgb(0, 0, 0, 10), bytes((0x8A, 0, 0, 0, 0, 0)))
 
+    def _heartbeat(self, mesh_address, phone_key, subtype=4):
+        data = bytes((0x20 | subtype, mesh_address & 0xFF, 9)) + bytes(9)
+        return bytes(
+            protocol.package_body(3, mesh_address >> 8, 42, phone_key[3], False, data, phone_key)
+        )
+
+    def test_parse_heartbeat(self):
+        key = bytes.fromhex("A1A2A3A4")
+        beat = protocol.parse_heartbeat(self._heartbeat(7, key), key)
+        self.assertEqual(beat, protocol.Heartbeat(mesh_address=7, group_address=9))
+
+    def test_parse_heartbeat_high_address_bits(self):
+        key = bytes.fromhex("A1A2A3A4")
+        beat = protocol.parse_heartbeat(self._heartbeat(0x105, key), key)
+        self.assertEqual(beat.mesh_address, 0x105)
+
+    def test_parse_heartbeat_wrong_key_fails_checksum(self):
+        payload = self._heartbeat(7, bytes.fromhex("A1A2A3A4"))
+        self.assertIsNone(protocol.parse_heartbeat(payload, bytes.fromhex("31323334")))
+
+    def test_parse_heartbeat_ignores_other_types(self):
+        key = bytes.fromhex("A1A2A3A4")
+        self.assertIsNone(protocol.parse_heartbeat(self._heartbeat(7, key, subtype=0xB), key))
+        discovery = bytes.fromhex("4E6C7A79EC0BF10A52F2A1A85E367BC4")
+        self.assertIsNone(protocol.parse_heartbeat(discovery, key))
+
 
 if __name__ == "__main__":
     unittest.main()

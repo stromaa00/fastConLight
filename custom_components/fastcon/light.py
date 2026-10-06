@@ -18,7 +18,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import FastconConfigEntry
-from .const import signal_new_device
+from .const import signal_availability, signal_new_device
 from .entity import light_device_info
 from .hub import FastconDevice, FastconHub
 from .protocol import (
@@ -95,9 +95,21 @@ class FastconLight(LightEntity, RestoreEntity):
         self._attr_is_on = False
         self._attr_brightness = 255
 
+    @property
+    def available(self) -> bool:
+        """Unavailable once the light's heartbeats stop (e.g. switched off at the wall)."""
+        return self._hub.is_available(self._device.did)
+
     async def async_added_to_hass(self) -> None:
-        """Restore the last assumed state."""
+        """Restore the last assumed state and follow availability changes."""
         await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_availability(self._hub.entry.entry_id),
+                self.async_write_ha_state,
+            )
+        )
         if (last := await self.async_get_last_state()) is None:
             return
         self._attr_is_on = last.state == STATE_ON
