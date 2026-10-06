@@ -110,6 +110,10 @@ class FastconHub:
         self._last_auto_bind: dict[str, float] = {}
         # Address a device had before the user changed it, to spot failed binds
         self._previous_address: dict[str, int] = {}
+        # Binds the user asked for that the light may not have accepted yet.
+        # A light only accepts a bind in discovery mode (after a power cycle),
+        # so these are sent again as soon as the light announces itself.
+        self._pending_bind: set[str] = set()
         # Bind discovered lights automatically; off unless the user turns it on
         self.auto_bind = False
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
@@ -194,6 +198,15 @@ class FastconHub:
     @callback
     def _async_auto_bind(self, device: FastconDevice, reported_address: int) -> None:
         now = time.monotonic()
+        if device.did in self._pending_bind:
+            self._pending_bind.discard(device.did)
+            self._last_auto_bind[device.did] = now
+            _LOGGER.info(
+                "BRMesh %s is in discovery mode; sending its pending bind to mesh address %d",
+                device.name, device.mesh_address,
+            )
+            self.async_bind(device, pending=False)
+            return
         last = self._last_auto_bind.get(device.did)
         if last is not None and now - last < AUTO_BIND_COOLDOWN:
             return
@@ -202,7 +215,7 @@ class FastconHub:
             if reported_address and reported_address != device.mesh_address:
                 _LOGGER.info(
                     "BRMesh %s reports mesh address %d but Home Assistant uses %d; "
-                    "turn on auto-bind or press 'Bind all devices'",
+                    "press its Bind button now or turn on auto-bind",
                     device.name, reported_address, device.mesh_address,
                 )
             return
@@ -215,7 +228,7 @@ class FastconHub:
             _LOGGER.info(
                 "Binding BRMesh %s to mesh address %d", device.name, device.mesh_address
             )
-        self.async_bind(device, scan_first=False)
+        self.async_bind(device, pending=False)
 
     def _record_broadcast(
         self, service_info: bluetooth.BluetoothServiceInfoBleak, payload: bytes
@@ -270,7 +283,7 @@ class FastconHub:
             ):
                 _LOGGER.warning(
                     "BRMesh %s still reports its old mesh address %d instead of %d; "
-                    "the bind didn't arrive, press its Bind button again",
+                    "switch the light off and on so it accepts the pending bind",
                     stale.name, beat.mesh_address, stale.mesh_address,
                 )
             else:
@@ -280,6 +293,7 @@ class FastconHub:
                 )
             return
         self._previous_address.pop(device.did, None)
+        self._pending_bind.discard(device.did)
         now = time.monotonic()
         if (last := self._last_heartbeat.get(device.did)) is not None and (
             now - last >= HEARTBEAT_BURST_GAP
@@ -358,6 +372,8 @@ class FastconHub:
             self._last_heartbeat.pop(did, None)
             self._heartbeat_intervals.pop(did, None)
             self._last_auto_bind.pop(did, None)
+            self._pending_bind.discard(did)
+            self._previous_address.pop(did, None)
             self._unavailable.discard(did)
             self._async_save()
 
@@ -384,16 +400,20 @@ class FastconHub:
         self._queue("scan", self._builder.scan)
 
     @callback
-    def async_bind(self, device: FastconDevice, scan_first: bool = True) -> None:
+    def async_bind(self, device: FastconDevice, pending: bool = True) -> None:
         """Give a device its mesh address and the phone key.
 
-        A light only accepts a bind while it's in discovery mode, i.e. shortly
-        after a scan request (real data: binds to new addresses were ignored
-        unless a scan came just before). So send a scan right before the bind,
-        unless the light has just announced itself anyway (auto-bind).
+        A light only accepts a bind in discovery mode, which it enters after a
+        power cycle. The bind is sent now (in case it is), and with `pending`
+        it is sent again when the light next announces itself.
         """
-        if scan_first:
-            self._queue(f"bind-scan:{device.did}", self._builder.scan)
+        if pending:
+            self._pending_bind.add(device.did)
+            _LOGGER.info(
+                "Bind for BRMesh %s (mesh address %d) sent; if the light doesn't take "
+                "it, switch the light off and on and it is bound when it announces itself",
+                device.name, device.mesh_address,
+            )
         self._queue(
             f"bind:{device.did}",
             lambda: self._builder.bind(
