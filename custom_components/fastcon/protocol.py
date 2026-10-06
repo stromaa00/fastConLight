@@ -305,3 +305,27 @@ def parse_heartbeat(payload: bytes, phone_key: bytes) -> Heartbeat | None:
         mesh_address=content[1] | ((header[0] & 0x0F) << 8),
         group_address=content[2],
     )
+
+
+def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
+    """Decode the generic body fields of any BRMesh broadcast, for logging."""
+    if len(payload) < 4:
+        return {"kind": "too short"}
+    header = bytes(b ^ DEFAULT_ENCRYPT_KEY[i] for i, b in enumerate(payload[:4]))
+    content = bytes(b ^ phone_key[i & 3] for i, b in enumerate(payload[4:]))
+    header_type = (header[0] >> 4) & 7
+    info = {
+        "kind": {1: "discovery", 3: "status"}.get(header_type, "unknown"),
+        "header_type": header_type,
+        "forward": bool(header[0] & 0x80),
+        "address_high": header[0] & 0x0F,
+        "sequence": header[1],
+        "safe_key": header[2],
+        "checksum_ok": (sum(header[:3]) + sum(content)) & 0xFF == header[3],
+        "data": content.hex(),
+    }
+    if header_type == 3 and content:
+        info["subtype"] = content[0] & 0x0F
+        if info["subtype"] == 4:
+            info["kind"] = "heartbeat"
+    return info

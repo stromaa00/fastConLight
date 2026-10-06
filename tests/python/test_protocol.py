@@ -125,6 +125,18 @@ class ProtocolTest(unittest.TestCase):
         discovery = bytes.fromhex("4E6C7A79EC0BF10A52F2A1A85E367BC4")
         self.assertIsNone(protocol.parse_heartbeat(discovery, key))
 
+    def test_describe_heartbeat(self):
+        key = bytes.fromhex("A1A2A3A4")
+        info = protocol.describe_broadcast(self._heartbeat(7, key), key)
+        self.assertEqual(info["kind"], "heartbeat")
+        self.assertEqual(info["sequence"], 42)
+        self.assertTrue(info["checksum_ok"])
+
+    def test_describe_discovery(self):
+        payload = bytes.fromhex("4E6C7A79EC0BF10A52F2A1A85E367BC4")
+        info = protocol.describe_broadcast(payload, bytes.fromhex("A1A2A3A4"))
+        self.assertEqual(info["kind"], "discovery")
+
 
 if __name__ == "__main__":
     unittest.main()

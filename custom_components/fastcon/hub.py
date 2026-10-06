@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import timedelta
@@ -15,6 +16,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .advertiser import AdvertiseError, Advertiser
 from .const import (
@@ -34,11 +36,17 @@ from .protocol import (
     MANUFACTURER_ID,
     CommandBuilder,
     Heartbeat,
+    describe_broadcast,
     parse_broadcast,
     parse_heartbeat,
 )
 
 _LOGGER = logging.getLogger(__name__)
+# Every received BRMesh broadcast is logged here at INFO level. Off by default;
+# enable with logger.set_level: custom_components.fastcon.broadcasts: info
+_BROADCAST_LOGGER = logging.getLogger(f"{__package__}.broadcasts")
+
+RECENT_BROADCASTS = 200  # kept for the diagnostics download
 
 STORAGE_VERSION = 1
 
@@ -88,6 +96,8 @@ class FastconHub:
         # Monotonic time of the last heartbeat per DID, and DIDs considered offline
         self._last_heartbeat: dict[str, float] = {}
         self._unavailable: set[str] = set()
+        self._last_heartbeat_time: dict[str, str] = {}
+        self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
 
     async def async_setup(self) -> None:
         """Load stored devices and start listening and sending."""
@@ -132,13 +142,11 @@ class FastconHub:
         payload = service_info.manufacturer_data.get(MANUFACTURER_ID)
         if payload is None:
             return
+        self._record_broadcast(service_info, payload)
         if (beat := parse_heartbeat(payload, self.phone_key)) is not None:
             self._async_on_heartbeat(service_info.address, beat)
             return
         if (found := parse_broadcast(payload)) is None:
-            _LOGGER.debug(
-                "Unhandled broadcast from %s: %s", service_info.address, payload.hex()
-            )
             return
         did = found.did.hex().upper()
         if did in self.devices:
@@ -152,6 +160,36 @@ class FastconHub:
                 mesh_address=self.next_free_address(),
             )
         )
+
+    def _record_broadcast(
+        self, service_info: bluetooth.BluetoothServiceInfoBleak, payload: bytes
+    ) -> None:
+        info = describe_broadcast(payload, self.phone_key)
+        beat = parse_heartbeat(payload, self.phone_key)
+        mesh = beat.mesh_address if beat else None
+        device = next(
+            (d for d in self.devices.values() if mesh is not None and d.mesh_address == mesh),
+            None,
+        )
+        record = {
+            "time": dt_util.utcnow().isoformat(),
+            "address": service_info.address,
+            "rssi": service_info.rssi,
+            "mesh_address": mesh,
+            "light": device.name if device else None,
+            "raw": payload.hex(),
+            **info,
+        }
+        self.recent_broadcasts.append(record)
+        _BROADCAST_LOGGER.info(
+            "%s from %s rssi=%s seq=%d mesh=%s light=%s checksum=%s data=%s raw=%s",
+            info["kind"], service_info.address, service_info.rssi, info.get("sequence", -1),
+            mesh, record["light"], info.get("checksum_ok"), info.get("data"), record["raw"],
+        )
+
+    def last_heartbeat_time(self, did: str) -> str | None:
+        """ISO time of the last heartbeat from a device, if any."""
+        return self._last_heartbeat_time.get(did)
 
     @callback
     def _async_on_heartbeat(self, address: str, beat: Heartbeat) -> None:
@@ -171,6 +209,7 @@ class FastconHub:
                 device.name, beat.mesh_address, address, now - last,
             )
         self._last_heartbeat[device.did] = now
+        self._last_heartbeat_time[device.did] = dt_util.utcnow().isoformat()
         if device.did in self._unavailable:
             self._unavailable.discard(device.did)
             _LOGGER.info("BRMesh %s is reachable again", device.name)
