@@ -16,11 +16,11 @@ Full details: [SPECIFICATION.md](SPECIFICATION.md)
 
 ## Home Assistant Bluetooth integration
 
-Uses the Bluetooth adapter of the Home Assistant host. Commands are broadcast through BlueZ, so no ESP32 is needed.
+Uses the Bluetooth adapter of the Home Assistant host, so no ESP32 is needed. Commands are broadcast through the Linux Bluetooth management API (MGMT) with the same 31-byte packets the ESP32 firmware sends. Tested on a Home Assistant Yellow.
 
 ### Requirements
 
-- Home Assistant 2024.8 or newer on Linux (Home Assistant OS, Supervised, or Docker with `/run/dbus` mounted)
+- Home Assistant 2024.8 or newer on Linux (Home Assistant OS, Supervised, or Docker with `NET_ADMIN` and `/run/dbus` mounted)
 - A local Bluetooth adapter (Bluetooth 4.0 or newer). Bluetooth proxies can receive but cannot send commands.
 
 ### Installation via HACS

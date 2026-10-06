@@ -335,7 +335,7 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 
 **Requirements**
 
-- Home Assistant 2024.8 or newer on Linux with BlueZ (Home Assistant OS, Supervised, or Docker with `/run/dbus` mounted).
+- Home Assistant 2024.8 or newer on Linux (Home Assistant OS, Supervised, or Docker with `NET_ADMIN` and `/run/dbus` mounted).
 - A **local** Bluetooth adapter that supports LE advertising (Bluetooth 4.0+). Bluetooth proxies can receive but cannot send commands.
 
 **Entities**
@@ -770,7 +770,7 @@ esphome compile fastcon-esp32.yaml --verbose
 
 - **L-010:** ESP32 firmware requires Bluetooth 5.0 extended advertising (ESP32-S3/C3/C6/H2)
 - **L-011:** Original ESP32 boards (T-Beam, ESP32-POE) are not supported by the ESP32 firmware; use the HA Bluetooth option instead
-- **L-016:** HA Bluetooth option needs Linux/BlueZ and a local adapter; it cannot send through Bluetooth proxies
+- **L-016:** HA Bluetooth option needs Linux, `CAP_NET_ADMIN` and a local adapter; it cannot send through Bluetooth proxies
 - **L-017:** HA Bluetooth option sends one command at a time (default 3 s each)
 - **L-012:** Custom partition table required for ESP32-C6
 
@@ -813,6 +813,17 @@ esphome compile fastcon-esp32.yaml --verbose
 - ⏳ Automations trigger correctly
 - ⏳ Multiple lights work simultaneously
 - ⏳ Network reconnection recovery
+
+### 12.4 HA Bluetooth Integration (Home Assistant Yellow, October 2026)
+
+- ✅ Sending through MGMT without errors
+- ✅ Lights discovered and added automatically
+- ✅ Bind all devices
+- ✅ Lights respond to commands from Home Assistant
+- ⏳ Brightness, RGB and white individually confirmed
+- ⏳ Behaviour after host reboot
+
+Problems found and fixed on the way: BlueZ D-Bus rejects the 31-byte packet (`Invalid Parameters`); non-connectable advertising needs a random address the controller refuses while scanning (`Opcode 0x2005 failed: -16`); unread MGMT events filled the socket buffer (`ENOMEM`).
 
 ---
 
