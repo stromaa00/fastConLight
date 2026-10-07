@@ -110,7 +110,11 @@ class FastconHub:
         self.relay_scan: bool = config.get(CONF_RELAY_SCAN, DEFAULT_RELAY_SCAN)
         # ESPHome actions (e.g. "brmesh_transmitter_send_brmesh") that broadcast
         # our packets from ESP32s near lights the adapter can't reach
-        self.transmitters: list[str] = list(config.get(CONF_TRANSMITTERS, []))
+        self.transmitters: list[str] = [
+            action.strip().removeprefix("esphome.")
+            for action in config.get(CONF_TRANSMITTERS, [])
+            if action.strip()
+        ]
         self.use_local_adapter: bool = config.get(CONF_USE_LOCAL_ADAPTER, True)
         self._advertiser = Advertiser(self.adapter, self.interval_ms)
         self._builder = CommandBuilder()

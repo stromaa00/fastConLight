@@ -130,7 +130,7 @@ class FastconOptionsFlow(OptionsFlow):
             | {
                 action
                 for action in self.hass.services.async_services_for_domain("esphome")
-                if action.endswith(TRANSMITTER_ACTION_SUFFIX)
+                if action.endswith(TRANSMITTER_ACTION_SUFFIX) or "brmesh" in action
             }
         )
         if user_input is not None:
@@ -182,7 +182,8 @@ class FastconOptionsFlow(OptionsFlow):
                             options=transmitter_options,
                             multiple=True,
                             custom_value=True,
-                            mode=selector.SelectSelectorMode.LIST,
+                            # Dropdown allows typing an action that isn't listed
+                            mode=selector.SelectSelectorMode.DROPDOWN,
                         )
                     ),
                     vol.Required(
