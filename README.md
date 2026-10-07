@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/stromaa00/fastConLight/main/custom_components/fastcon/brand/icon@2x.png" alt="fastConLight" width="128">
+</p>
+
 # fastConLight
 
 Control **BRMesh / Fastcon** Bluetooth lights from Home Assistant, without the BRMesh app.
