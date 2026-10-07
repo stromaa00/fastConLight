@@ -2,8 +2,13 @@
 # integration, for lights out of range of the Home Assistant host.
 # Also works as a regular Bluetooth proxy.
 #
+# Needs wifi_ssid, wifi_password and api_encryption_key in your ESPHome
+# secrets (Secrets button in the ESPHome dashboard). A key can be generated
+# at https://esphome.io/components/api.html or by creating any new device
+# in the dashboard. Home Assistant asks for the same key when adding it.
+#
 # After adding the device to Home Assistant, select its "send_brmesh"
-# action under BRMesh / Fastcon -> Configure -> Settings -> Transmitters.
+# action under BRMesh / Fastcon -> Configure -> Settings -> ESP32 transmitters.
 
 substitutions:
   name: brmesh-transmitter
@@ -35,7 +40,7 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    # password: !secret ota_password  # optional
 
 external_components:
   - source: github://stromaa00/fastConLight@main
