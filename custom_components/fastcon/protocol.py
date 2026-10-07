@@ -197,9 +197,12 @@ class CommandBuilder:
         whiten(payload)
         return bytes(payload[0x0F:])
 
-    def scan(self) -> bytes:
-        """Ask unbound devices to announce themselves."""
-        return self.generate(CMD_SCAN, bytes(12), None, forward=False)
+    def scan(self, forward: bool = False) -> bytes:
+        """Ask devices in discovery mode to announce themselves.
+
+        With `forward`, lights relay the request through the mesh.
+        """
+        return self.generate(CMD_SCAN, bytes(12), None, forward=forward)
 
     def bind(
         self, did: bytes, mesh_address: int, phone_key: bytes, device_key: bytes

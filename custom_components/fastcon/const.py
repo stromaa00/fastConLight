@@ -5,6 +5,8 @@ DOMAIN = "fastcon"
 CONF_ADAPTER = "adapter"
 CONF_PHONE_KEY = "phone_key"
 CONF_ADVERTISE_DURATION = "advertise_duration"
+CONF_ADVERTISE_INTERVAL = "advertise_interval"
+CONF_RELAY_SCAN = "relay_scan"
 CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_TYPE = "device_type"
 CONF_DEVICE_KEY = "device_key"
@@ -13,6 +15,12 @@ CONF_MESH_ADDRESS = "mesh_address"
 DEFAULT_PHONE_KEY = "A1A2A3A4"
 # The firmware advertises each command for 3 s; lights usually react much sooner.
 DEFAULT_ADVERTISE_DURATION = 3.0
+# Time between advertising packets. Connectable advertising (used first)
+# allows down to 20 ms; more packets give weak lights more chances.
+DEFAULT_ADVERTISE_INTERVAL = 100  # ms
+# Send scan requests with the forward bit so lights relay them to lights
+# out of the adapter's range. Untested, off by default.
+DEFAULT_RELAY_SCAN = False
 
 # BRMesh lights broadcast from addresses starting with 11:22
 DEVICE_ADDRESS_PREFIX = "11:22:"

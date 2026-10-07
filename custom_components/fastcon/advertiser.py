@@ -250,10 +250,10 @@ class Advertiser:
     works where the kernel leaves enough room next to its own flags.
     """
 
-    def __init__(self, adapter: str) -> None:
+    def __init__(self, adapter: str, interval_ms: int = DEFAULT_INTERVAL_MS) -> None:
         self._adapter = adapter
-        self._mgmt: MgmtAdvertiser | None = MgmtAdvertiser(adapter, DEFAULT_INTERVAL_MS)
-        self._bluez = BlueZAdvertiser(adapter)
+        self._mgmt: MgmtAdvertiser | None = MgmtAdvertiser(adapter, interval_ms)
+        self._bluez = BlueZAdvertiser(adapter, max(interval_ms, DEFAULT_INTERVAL_MS))
         # Once MGMT has worked, later errors are treated as transient.
         self._mgmt_worked = False
 

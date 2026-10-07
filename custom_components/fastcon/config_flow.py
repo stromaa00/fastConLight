@@ -23,13 +23,17 @@ from .advertiser import async_list_adapters
 from .const import (
     CONF_ADAPTER,
     CONF_ADVERTISE_DURATION,
+    CONF_ADVERTISE_INTERVAL,
     CONF_DEVICE_ID,
     CONF_DEVICE_KEY,
     CONF_DEVICE_TYPE,
     CONF_MESH_ADDRESS,
     CONF_PHONE_KEY,
+    CONF_RELAY_SCAN,
     DEFAULT_ADVERTISE_DURATION,
+    DEFAULT_ADVERTISE_INTERVAL,
     DEFAULT_PHONE_KEY,
+    DEFAULT_RELAY_SCAN,
     DEVICE_ADDRESS_PREFIX,
     DOMAIN,
 )
@@ -144,6 +148,21 @@ class FastconOptionsFlow(OptionsFlow):
                             mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
+                    vol.Required(
+                        CONF_ADVERTISE_INTERVAL,
+                        default=config.get(
+                            CONF_ADVERTISE_INTERVAL, DEFAULT_ADVERTISE_INTERVAL
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=20, max=1000, step=10, unit_of_measurement="ms",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_RELAY_SCAN,
+                        default=config.get(CONF_RELAY_SCAN, DEFAULT_RELAY_SCAN),
+                    ): bool,
                 }
             ),
             errors=errors,

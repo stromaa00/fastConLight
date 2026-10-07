@@ -26,9 +26,13 @@ from .const import (
     AVAILABILITY_CHECK_INTERVAL,
     CONF_ADAPTER,
     CONF_ADVERTISE_DURATION,
+    CONF_ADVERTISE_INTERVAL,
     CONF_PHONE_KEY,
+    CONF_RELAY_SCAN,
     DEFAULT_ADVERTISE_DURATION,
+    DEFAULT_ADVERTISE_INTERVAL,
     DEFAULT_PHONE_KEY,
+    DEFAULT_RELAY_SCAN,
     DEVICE_ADDRESS_PREFIX,
     DOMAIN,
     HEARTBEAT_BURST_GAP,
@@ -98,7 +102,11 @@ class FastconHub:
         self._store: Store[dict] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
-        self._advertiser = Advertiser(self.adapter)
+        self.interval_ms = int(
+            config.get(CONF_ADVERTISE_INTERVAL, DEFAULT_ADVERTISE_INTERVAL)
+        )
+        self.relay_scan: bool = config.get(CONF_RELAY_SCAN, DEFAULT_RELAY_SCAN)
+        self._advertiser = Advertiser(self.adapter, self.interval_ms)
         self._builder = CommandBuilder()
         # Pending commands keyed by target, so a newer command for the same
         # light replaces one that hasn't been sent yet (e.g. slider drags).
@@ -446,7 +454,11 @@ class FastconHub:
     @callback
     def async_scan(self) -> None:
         """Ask unbound lights to announce themselves."""
-        self._queue("scan", self._builder.scan, lambda: "scan request")
+        self._queue(
+            "scan",
+            lambda: self._builder.scan(forward=self.relay_scan),
+            lambda: "scan request (relayed by lights)" if self.relay_scan else "scan request",
+        )
 
     @callback
     def async_bind(self, device: FastconDevice, pending: bool = True) -> None:

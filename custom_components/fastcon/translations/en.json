@@ -33,10 +33,14 @@
         "title": "Settings",
         "data": {
           "phone_key": "Phone key (8 hex characters)",
-          "advertise_duration": "Broadcast time per command"
+          "advertise_duration": "Broadcast time per command",
+          "advertise_interval": "Time between packets",
+          "relay_scan": "Let lights relay scan requests"
         },
         "data_description": {
-          "advertise_duration": "How long each command is broadcast. Shorter is faster; raise it if lights miss commands."
+          "advertise_duration": "How long each command is broadcast. Shorter is faster; raise it if lights miss commands.",
+          "advertise_interval": "Shorter means more packets per command, so weak lights are more likely to receive it. Down to 20 ms works for connectable advertising (the default).",
+          "relay_scan": "Sends scan requests with the forward bit, so lights near Home Assistant pass them on to lights out of range. Experimental."
         }
       },
       "add_device": {
