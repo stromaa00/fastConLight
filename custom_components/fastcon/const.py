@@ -7,6 +7,8 @@ CONF_PHONE_KEY = "phone_key"
 CONF_ADVERTISE_DURATION = "advertise_duration"
 CONF_ADVERTISE_INTERVAL = "advertise_interval"
 CONF_RELAY_SCAN = "relay_scan"
+CONF_TRANSMITTERS = "transmitters"
+CONF_USE_LOCAL_ADAPTER = "use_local_adapter"
 CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_TYPE = "device_type"
 CONF_DEVICE_KEY = "device_key"
@@ -21,6 +23,9 @@ DEFAULT_ADVERTISE_INTERVAL = 100  # ms
 # Send scan requests with the forward bit so lights relay them to lights
 # out of the adapter's range. Untested, off by default.
 DEFAULT_RELAY_SCAN = False
+# ESPHome devices running the brmesh_tx component expose this action;
+# Home Assistant names it esphome.<device>_send_brmesh.
+TRANSMITTER_ACTION_SUFFIX = "send_brmesh"
 
 # BRMesh lights broadcast from addresses starting with 11:22
 DEVICE_ADDRESS_PREFIX = "11:22:"

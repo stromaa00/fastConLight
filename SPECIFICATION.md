@@ -377,6 +377,15 @@ Lights set up in the BRMesh app already know the app's mesh key (its "phone key"
 
 With the app's key, heartbeats decode (header type 3, data subtype 4) and drive availability: the integration learns each light's heartbeat interval and marks it unavailable after 4 missed heartbeats (at least 5 minutes).
 
+**ESP32 transmitters (range extension)**
+
+A Bluetooth proxy can only listen, so lights out of range of the Home Assistant host can't be reached through one. Instead, an ESP32 running the `brmesh_tx` ESPHome component (`components/brmesh_tx`, example config `brmesh-transmitter.yaml`) broadcasts the integration's packets:
+
+- The device exposes the action `send_brmesh` (`payload`: the 24-byte packet as hex, `duration_ms`). Home Assistant names it `esphome.<device>_send_brmesh`.
+- Under **Configure → Settings → ESP32 transmitters**, select one or more of these actions. Every command (light, scan, bind) is then sent through all of them at the same time, plus the local adapter unless **Also send from this Home Assistant adapter** is off.
+- Any ESP32 works (legacy advertising, 31 bytes); the same device can also be a Bluetooth proxy, so it both hears the distant lights and sends to them.
+- Sent entries in the diagnostics list the transmitters used under `via`.
+
 ### 7.4 Device Identification
 
 Each device has a unique identifier:

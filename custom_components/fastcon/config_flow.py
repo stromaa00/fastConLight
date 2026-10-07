@@ -30,12 +30,15 @@ from .const import (
     CONF_MESH_ADDRESS,
     CONF_PHONE_KEY,
     CONF_RELAY_SCAN,
+    CONF_TRANSMITTERS,
+    CONF_USE_LOCAL_ADAPTER,
     DEFAULT_ADVERTISE_DURATION,
     DEFAULT_ADVERTISE_INTERVAL,
     DEFAULT_PHONE_KEY,
     DEFAULT_RELAY_SCAN,
     DEVICE_ADDRESS_PREFIX,
     DOMAIN,
+    TRANSMITTER_ACTION_SUFFIX,
 )
 from .hub import FastconDevice
 
@@ -122,6 +125,14 @@ class FastconOptionsFlow(OptionsFlow):
         """Phone key and advertising duration."""
         config = {**self.config_entry.data, **self.config_entry.options}
         errors: dict[str, str] = {}
+        transmitter_options = sorted(
+            set(config.get(CONF_TRANSMITTERS, []))
+            | {
+                action
+                for action in self.hass.services.async_services_for_domain("esphome")
+                if action.endswith(TRANSMITTER_ACTION_SUFFIX)
+            }
+        )
         if user_input is not None:
             phone_key = user_input[CONF_PHONE_KEY].strip()
             if _is_hex(phone_key, 8):
@@ -162,6 +173,21 @@ class FastconOptionsFlow(OptionsFlow):
                     vol.Required(
                         CONF_RELAY_SCAN,
                         default=config.get(CONF_RELAY_SCAN, DEFAULT_RELAY_SCAN),
+                    ): bool,
+                    vol.Optional(
+                        CONF_TRANSMITTERS,
+                        default=config.get(CONF_TRANSMITTERS, []),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=transmitter_options,
+                            multiple=True,
+                            custom_value=True,
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_USE_LOCAL_ADAPTER,
+                        default=config.get(CONF_USE_LOCAL_ADAPTER, True),
                     ): bool,
                 }
             ),

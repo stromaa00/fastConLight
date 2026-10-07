@@ -29,6 +29,8 @@ from .const import (
     CONF_ADVERTISE_INTERVAL,
     CONF_PHONE_KEY,
     CONF_RELAY_SCAN,
+    CONF_TRANSMITTERS,
+    CONF_USE_LOCAL_ADAPTER,
     DEFAULT_ADVERTISE_DURATION,
     DEFAULT_ADVERTISE_INTERVAL,
     DEFAULT_PHONE_KEY,
@@ -106,6 +108,10 @@ class FastconHub:
             config.get(CONF_ADVERTISE_INTERVAL, DEFAULT_ADVERTISE_INTERVAL)
         )
         self.relay_scan: bool = config.get(CONF_RELAY_SCAN, DEFAULT_RELAY_SCAN)
+        # ESPHome actions (e.g. "brmesh_transmitter_send_brmesh") that broadcast
+        # our packets from ESP32s near lights the adapter can't reach
+        self.transmitters: list[str] = list(config.get(CONF_TRANSMITTERS, []))
+        self.use_local_adapter: bool = config.get(CONF_USE_LOCAL_ADAPTER, True)
         self._advertiser = Advertiser(self.adapter, self.interval_ms)
         self._builder = CommandBuilder()
         # Pending commands keyed by target, so a newer command for the same
@@ -539,6 +545,47 @@ class FastconHub:
         self._pending[key] = (build, action, device)
         self._wakeup.set()
 
+    async def _async_broadcast(self, key: str, payload: bytes) -> list[str]:
+        """Send from the local adapter and every ESP32 transmitter at once.
+
+        Returns the errors; waits the advertising duration either way so the
+        next command doesn't cut this one short on the transmitters.
+        """
+        errors: list[str] = []
+
+        async def local() -> None:
+            try:
+                await self._advertiser.advertise(MANUFACTURER_ID, payload, self.duration)
+            except (AdvertiseError, OSError) as err:
+                errors.append(f"{self.adapter}: {err}")
+                _LOGGER.error("Could not advertise on %s (%s): %s", self.adapter, key, err)
+
+        async def remote(action: str) -> None:
+            try:
+                await self.hass.services.async_call(
+                    "esphome",
+                    action,
+                    {"payload": payload.hex(), "duration_ms": int(self.duration * 1000)},
+                    blocking=True,
+                )
+            except Exception as err:  # noqa: BLE001 - report any transmitter failure
+                errors.append(f"esphome.{action}: {err}")
+                _LOGGER.error("Could not send through esphome.%s (%s): %s", action, key, err)
+
+        tasks = [remote(action) for action in self.transmitters]
+        if self.use_local_adapter or not self.transmitters:
+            tasks.append(local())
+        else:
+            tasks.append(asyncio.sleep(self.duration))
+        await asyncio.gather(*tasks)
+        return errors
+
+    def _via(self) -> list[str]:
+        via = [f"esphome.{action}" for action in self.transmitters]
+        if self.use_local_adapter or not self.transmitters:
+            via.insert(0, self.adapter)
+        return via
+
     def _record_sent(
         self, action: str, device: FastconDevice | None, payload: bytes, error: str | None
     ) -> None:
@@ -550,6 +597,7 @@ class FastconHub:
             "light": device.name if device else None,
             "mesh_address": device.mesh_address if device else None,
             "sequence": self._builder.last_sequence,
+            "via": self._via(),
             "result": error or "ok",
             "raw": payload.hex(),
         }
@@ -570,14 +618,7 @@ class FastconHub:
                 payload = build()
                 self._sent_sequences.append(self._builder.last_sequence)
                 _LOGGER.debug("Sending %s: %s", key, payload.hex())
-                error = None
-                try:
-                    await self._advertiser.advertise(
-                        MANUFACTURER_ID, payload, self.duration
-                    )
-                except (AdvertiseError, OSError) as err:
-                    error = str(err)
-                    _LOGGER.error(
-                        "Could not advertise on %s (%s): %s", self.adapter, key, err
-                    )
-                self._record_sent(action(), device, payload, error)
+                errors = await self._async_broadcast(key, payload)
+                self._record_sent(
+                    action(), device, payload, "; ".join(errors) if errors else None
+                )

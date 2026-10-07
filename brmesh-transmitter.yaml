@@ -1,0 +1,51 @@
+# ESP32 that broadcasts BRMesh commands for the fastcon Home Assistant
+# integration, for lights out of range of the Home Assistant host.
+# Also works as a regular Bluetooth proxy.
+#
+# After adding the device to Home Assistant, select its "send_brmesh"
+# action under BRMesh / Fastcon -> Configure -> Settings -> Transmitters.
+
+substitutions:
+  name: brmesh-transmitter
+
+esphome:
+  name: ${name}
+
+esp32:
+  board: esp32dev  # change to your board; any ESP32 works
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  actions:
+    - action: send_brmesh
+      variables:
+        payload: string
+        duration_ms: int
+      then:
+        - lambda: 'id(brmesh).send(payload, duration_ms);'
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+external_components:
+  - source: github://stromaa00/fastConLight@main
+    components: [brmesh_tx]
+
+esp32_ble_tracker:
+
+bluetooth_proxy:
+  active: true
+
+brmesh_tx:
+  id: brmesh
+  interval: 100ms
