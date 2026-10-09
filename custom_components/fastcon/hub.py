@@ -143,6 +143,9 @@ class FastconHub:
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
         # Sequence numbers of our own recent commands, to recognise relays of them
         self._sent_sequences: deque[int] = deque(maxlen=50)
+        # Our own recent packets, to recognise when one of our senders (the
+        # adapter, an ESP32 transmitter) hears another one sending them
+        self._sent_payloads: deque[bytes] = deque(maxlen=50)
 
     async def async_setup(self) -> None:
         """Load stored devices and start listening and sending."""
@@ -307,12 +310,20 @@ class FastconHub:
             None,
         )
         own = info["kind"] == "control" and info.get("sequence") in self._sent_sequences
+        # Lights always send from 11:22:..., so our exact packet from any other
+        # address is one of our own senders heard by another, not a light.
+        echo = (
+            not service_info.address.upper().startswith(DEVICE_ADDRESS_PREFIX)
+            and payload in self._sent_payloads
+        )
         action = describe_action({**info, "header_mesh": mesh})
-        if info["kind"] == "control" and info.get("checksum_ok"):
+        if echo:
+            action = f"echo of our own broadcast, not from a light: {action}"
+        elif info["kind"] == "control" and info.get("checksum_ok"):
             action += " (sent by Home Assistant)" if own else " (from another controller)"
         record = {
             "time": dt_util.utcnow().isoformat(),
-            "direction": "received",
+            "direction": "echo" if echo else "received",
             "action": action,
             "address": service_info.address,
             "rssi": service_info.rssi,
@@ -621,6 +632,7 @@ class FastconHub:
                 build, action, device = self._pending.pop(key)
                 payload = build()
                 self._sent_sequences.append(self._builder.last_sequence)
+                self._sent_payloads.append(payload)
                 _LOGGER.debug("Sending %s: %s", key, payload.hex())
                 errors = await self._async_broadcast(key, payload)
                 self._record_sent(

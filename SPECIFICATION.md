@@ -385,6 +385,7 @@ A Bluetooth proxy can only listen, so lights out of range of the Home Assistant 
 - Under **Configure → Settings → ESP32 transmitters**, select one or more of these actions. Every command (light, scan, bind) is then sent through all of them at the same time, plus the local adapter unless **Also send from this Home Assistant adapter** is off.
 - Any ESP32 works (legacy advertising, 31 bytes); the same device can also be a Bluetooth proxy, so it both hears the distant lights and sends to them.
 - Sent entries in the diagnostics list the transmitters used under `via`.
+- The adapter and the transmitters hear each other's packets. These show up in the diagnostics with `direction: echo`; only packets from `11:22:...` come from the lights.
 
 ### 7.4 Device Identification
 
