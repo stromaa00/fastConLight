@@ -64,3 +64,9 @@ Secrets: with the ESPHome add-on, add the keys to `/config/esphome/secrets.yaml`
 ## Arduino/PlatformIO Version (Legacy)
 
 The original Arduino implementation is in the `src/` directory. Copy `src/credentials.h.example` to `src/credentials.h` and enter your WiFi and MQTT settings.
+
+---
+
+## License
+
+[Apache License 2.0](LICENSE)
