@@ -31,5 +31,7 @@ async def async_get_config_entry_diagnostics(
             }
             for device in hub.devices.values()
         ],
+        "listening_since": hub.setup_time,
+        "received_broadcasts": hub.received_count,
         "recent_broadcasts": list(hub.recent_broadcasts),
     }

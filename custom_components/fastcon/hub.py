@@ -143,6 +143,10 @@ class FastconHub:
         # Bind discovered lights automatically; off unless the user turns it on
         self.auto_bind = False
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
+        # BRMesh broadcasts received since setup, to tell "nothing received"
+        # apart from "received but not understood" in the diagnostics
+        self.received_count = 0
+        self.setup_time = dt_util.utcnow().isoformat()
         # Sequence numbers of our own recent commands, to recognise relays of them
         self._sent_sequences: deque[int] = deque(maxlen=50)
         # Our own recent packets, to recognise when one of our senders (the
@@ -215,11 +219,14 @@ class FastconHub:
             return
         # Log every BRMesh broadcast, including ones sent directly by a phone
         # app or remote from their own address, but only act on the lights'.
+        self.received_count += 1
         self._record_broadcast(service_info, payload)
-        if not service_info.address.upper().startswith(DEVICE_ADDRESS_PREFIX):
-            return
+        # Heartbeats count from any address, like the BRMesh app does; only
+        # our own commands can't decode as one (they are type 5).
         if (beat := parse_heartbeat(payload, self.phone_key)) is not None:
             self._async_on_heartbeat(service_info.address, beat)
+            return
+        if not service_info.address.upper().startswith(DEVICE_ADDRESS_PREFIX):
             return
         if (found := parse_broadcast(payload)) is None:
             return

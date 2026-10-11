@@ -132,6 +132,12 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(info["sequence"], 42)
         self.assertTrue(info["checksum_ok"])
 
+    def test_describe_new_protocol_frame(self):
+        payload = bytes.fromhex("a55a") + bytes(20)
+        info = protocol.describe_broadcast(payload, bytes.fromhex("A1A2A3A4"))
+        self.assertEqual(info["kind"], "new protocol")
+        self.assertIsNone(protocol.parse_heartbeat(payload, bytes.fromhex("A1A2A3A4")))
+
     def test_describe_discovery(self):
         payload = bytes.fromhex("4E6C7A79EC0BF10A52F2A1A85E367BC4")
         info = protocol.describe_broadcast(payload, bytes.fromhex("A1A2A3A4"))

@@ -11,6 +11,8 @@ import random
 
 MANUFACTURER_ID = 0xFFF0
 DEFAULT_ENCRYPT_KEY = bytes((0x5E, 0x36, 0x7B, 0xC4))
+# Manufacturer data of the BRMesh app's "new protocol" frames starts with this
+NEW_PROTOCOL_MAGIC = b"\xa5\x5a"
 FASTCON_ADDRESS = bytes((0xC1, 0xC2, 0xC3))
 WHITENING_SEED = 0x25
 
@@ -344,6 +346,10 @@ def unwrap_rf_frame(payload: bytes) -> bytes | None:
 
 def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
     """Decode the generic body fields of any BRMesh broadcast, for logging."""
+    if payload[:2] == NEW_PROTOCOL_MAGIC:
+        # Newer devices' 22-byte frames, which the BRMesh app parses separately;
+        # their layout isn't known yet, so only label them.
+        return {"kind": "new protocol", "frame": "new", "data": payload[2:].hex()}
     body = unwrap_rf_frame(payload)
     frame = "rf" if body is not None else "plain"
     payload = body or payload
@@ -353,7 +359,16 @@ def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
     content = bytes(b ^ phone_key[i & 3] for i, b in enumerate(payload[4:]))
     header_type = (header[0] >> 4) & 7
     info = {
-        "kind": {1: "discovery", 2: "bind", 3: "status", 5: "control"}.get(
+        "kind": {
+            0: "scan",
+            1: "discovery",
+            2: "bind",
+            3: "status",
+            4: "status response",
+            5: "control",
+            6: "control response",
+            7: "remote control",
+        }.get(
             header_type, "unknown"
         ),
         "frame": frame,
@@ -439,4 +454,8 @@ def describe_action(info: dict) -> str:
         return f"control type {info.get('control_type')}: {info.get('data')}"
     if info.get("header_type") == 0:
         return "scan request"
+    if kind == "new protocol":
+        return f"new-protocol frame (layout unknown): {info.get('data')}"
+    if kind in ("status response", "control response", "remote control"):
+        return f"{kind} (type {info.get('header_type')})"
     return f"unknown broadcast (type {info.get('header_type')})"
