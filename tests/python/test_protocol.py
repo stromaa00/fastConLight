@@ -132,6 +132,18 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(info["sequence"], 42)
         self.assertTrue(info["checksum_ok"])
 
+    def test_describe_time_sync_from_brmesh_app(self):
+        # Captured from the BRMesh app (key "3077"), diagnostics 2026-10-11
+        raw = bytes.fromhex("6db64368931ddd5d9405223809f603cc5089f6655ff821b0")
+        info = protocol.describe_broadcast(raw, bytes.fromhex("33303737"))
+        self.assertTrue(info["checksum_ok"])
+        self.assertEqual(info["control_type"], 9)
+        self.assertEqual(info["mesh_address"], 0)
+        self.assertEqual(
+            protocol.describe_action(info),
+            "time sync: 2026-10-11 22:29:49 (weekday 0)",
+        )
+
     def test_describe_new_protocol_frame(self):
         payload = bytes.fromhex("a55a") + bytes(20)
         info = protocol.describe_broadcast(payload, bytes.fromhex("A1A2A3A4"))

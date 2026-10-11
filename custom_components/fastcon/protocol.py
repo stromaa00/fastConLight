@@ -428,6 +428,21 @@ def describe_command(command: bytes) -> str:
     return f"command {command.hex()}"
 
 
+def describe_time_sync(command: bytes) -> str:
+    """Describe the BRMesh app's clock broadcast (control type 9).
+
+    Seven bytes: year - 2000, month, day, weekday (0 = Sunday), hour, minute,
+    second, in the phone's local time.
+    """
+    if len(command) != 7:
+        return f"control type 9: {command.hex()}"
+    year, month, day, weekday, hour, minute, second = command
+    return (
+        f"time sync: 20{year:02d}-{month:02d}-{day:02d} "
+        f"{hour:02d}:{minute:02d}:{second:02d} (weekday {weekday})"
+    )
+
+
 def describe_action(info: dict) -> str:
     """Best guess at what a decoded broadcast means, for logs and diagnostics."""
     kind = info.get("kind")
@@ -451,6 +466,8 @@ def describe_action(info: dict) -> str:
             return "control command (other key, can't decode)"
         if info.get("control_type") == 2:
             return describe_command(bytes.fromhex(info.get("command", "")))
+        if info.get("control_type") == 9:
+            return describe_time_sync(bytes.fromhex(info.get("command", "")))
         return f"control type {info.get('control_type')}: {info.get('data')}"
     if info.get("header_type") == 0:
         return "scan request"
