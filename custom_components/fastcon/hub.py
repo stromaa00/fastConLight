@@ -46,6 +46,7 @@ from .const import (
     signal_new_device,
 )
 from .protocol import (
+    DEFAULT_ENCRYPT_KEY,
     MANUFACTURER_ID,
     CommandBuilder,
     Heartbeat,
@@ -54,6 +55,7 @@ from .protocol import (
     describe_command,
     parse_broadcast,
     parse_heartbeat,
+    unwrap_rf_frame,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -174,6 +176,16 @@ class FastconHub:
                 bluetooth.BluetoothCallbackMatcher(
                     address=LIGHT_BROADCAST_ADDRESS, connectable=False
                 ),
+                bluetooth.BluetoothScanningMode.ACTIVE,
+            )
+        )
+        # Heartbeat hunting: any advertisement from any address that looks like
+        # a type 3 BRMesh frame. Only does work at debug level.
+        self.entry.async_on_unload(
+            bluetooth.async_register_callback(
+                self.hass,
+                self._async_on_any_advertisement,
+                bluetooth.BluetoothCallbackMatcher(connectable=False),
                 bluetooth.BluetoothScanningMode.ACTIVE,
             )
         )
@@ -298,6 +310,45 @@ class FastconHub:
         }
         self.recent_broadcasts.append(record)
         _BROADCAST_LOGGER.info("other advertisement content from %s: %s", service_info.address, record)
+
+    @callback
+    def _async_on_any_advertisement(
+        self,
+        service_info: bluetooth.BluetoothServiceInfoBleak,
+        change: bluetooth.BluetoothChange,
+    ) -> None:
+        """Log anything that looks like a heartbeat, whatever its source.
+
+        Frames with manufacturer ID 0xFFF0 are already logged by
+        _record_broadcast; this covers other company IDs, service data and
+        any address. Enabled with logger level debug on the broadcasts logger.
+        """
+        if not _BROADCAST_LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        candidates = [
+            (f"manufacturer 0x{company:04X}", data)
+            for company, data in service_info.manufacturer_data.items()
+            if company != MANUFACTURER_ID
+        ]
+        candidates += [
+            (f"service data {uuid}", data)
+            for uuid, data in service_info.service_data.items()
+        ]
+        for source, data in candidates:
+            for offset in (0, 2):  # the company ID may be part of the data
+                body = unwrap_rf_frame(data[offset:]) or data[offset:]
+                if len(body) < 16:
+                    continue
+                header = bytes(b ^ DEFAULT_ENCRYPT_KEY[i] for i, b in enumerate(body[:4]))
+                if (header[0] >> 4) & 7 != 3:
+                    continue
+                beat = parse_heartbeat(data[offset:], self.phone_key)
+                _BROADCAST_LOGGER.debug(
+                    "possible heartbeat from %s (%s, offset %d) rssi=%s decoded=%s raw=%s",
+                    service_info.address, source, offset, service_info.rssi,
+                    beat, data.hex(),
+                )
+                break
 
     def _record_broadcast(
         self, service_info: bluetooth.BluetoothServiceInfoBleak, payload: bytes

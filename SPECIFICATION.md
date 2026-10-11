@@ -375,6 +375,8 @@ Lights set up in the BRMesh app already know the app's mesh key (its "phone key"
 3. Turn on **Auto-bind discovered lights** if Home Assistant should bind lights by itself, then press **Scan for devices**. Each light answers with a discovery broadcast and waits for a bind (discovery response). New lights keep the mesh address they report (header byte 2) if it's free. With auto-bind on, every discovered light is bound right away (at most once a minute per light), and known lights are bound back to the address Home Assistant stores. With it off, nothing is bound until **Bind all devices** is pressed; a log entry notes lights whose reported address differs.
 4. Stop using the app: opening it re-applies its own addresses. If that happens, a scan (with auto-bind on) or **Bind all devices** binds the lights back.
 
+To hunt for heartbeats that never reach the normal path, set `custom_components.fastcon.broadcasts` to `debug`: the integration then also logs, from any address, every advertisement (other company IDs, service data) whose header decodes to type 3 as `possible heartbeat from ...` with the raw bytes. At `info` only the `0xFFF0` frames are logged (those are logged regardless of source address).
+
 With the app's key, heartbeats decode (header type 3, data subtype 4) and drive availability: the integration learns each light's heartbeat interval and marks it unavailable after 4 missed heartbeats (at least 5 minutes).
 
 **ESP32 transmitters (range extension)**
