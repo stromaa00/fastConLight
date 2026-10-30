@@ -16,7 +16,8 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.core import callback
+from homeassistant.const import CONF_NAME
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
 from .advertiser import async_list_adapters
@@ -49,17 +50,32 @@ def _is_hex(value: str, length: int) -> bool:
     return re.fullmatch(f"[0-9A-Fa-f]{{{length}}}", value) is not None
 
 
+def _phone_key_in_use(
+    hass: HomeAssistant, phone_key: str, own_entry_id: str | None = None
+) -> bool:
+    """Whether another mesh (config entry) already uses this phone key."""
+    return any(
+        entry.entry_id != own_entry_id
+        and {**entry.data, **entry.options}.get(CONF_PHONE_KEY, "").upper()
+        == phone_key.upper()
+        for entry in hass.config_entries.async_entries(DOMAIN)
+    )
+
+
 class FastconConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Set up a BRMesh hub on a local Bluetooth adapter."""
+    """Set up a BRMesh hub (one mesh, i.e. one phone key) on a local adapter."""
 
     VERSION = 1
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
     ) -> ConfigFlowResult:
-        """A BRMesh light was seen; offer to set up the hub."""
+        """A BRMesh light was seen; offer to set up the first hub."""
         if not discovery_info.address.upper().startswith(DEVICE_ADDRESS_PREFIX):
             return self.async_abort(reason="not_supported")
+        # Further meshes are added by hand; a light's broadcast can't tell them apart.
+        if self._async_current_entries():
+            return self.async_abort(reason="already_configured")
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
         return await self.async_step_user()
@@ -67,22 +83,23 @@ class FastconConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Pick the adapter and phone key."""
-        await self.async_set_unique_id(DOMAIN)
-        self._abort_if_unique_id_configured()
-
+        """Pick the name, adapter and phone key."""
         errors: dict[str, str] = {}
         if user_input is not None:
             phone_key = user_input[CONF_PHONE_KEY].strip()
-            if _is_hex(phone_key, 8):
+            if not _is_hex(phone_key, 8):
+                errors[CONF_PHONE_KEY] = "invalid_key"
+            elif _phone_key_in_use(self.hass, phone_key):
+                errors[CONF_PHONE_KEY] = "key_in_use"
+            else:
+                name = user_input.get(CONF_NAME, "").strip() or "BRMesh"
                 return self.async_create_entry(
-                    title=f"BRMesh ({user_input[CONF_ADAPTER]})",
+                    title=f"{name} ({user_input[CONF_ADAPTER]})",
                     data={
                         CONF_ADAPTER: user_input[CONF_ADAPTER],
                         CONF_PHONE_KEY: phone_key.upper(),
                     },
                 )
-            errors[CONF_PHONE_KEY] = "invalid_key"
 
         try:
             adapters = await async_list_adapters()
@@ -92,12 +109,17 @@ class FastconConfigFlow(ConfigFlow, domain=DOMAIN):
         if not adapters:
             return self.async_abort(reason="no_adapters")
 
+        first = not self._async_current_entries()
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
+                    vol.Required(CONF_NAME, default="BRMesh"): str,
                     vol.Required(CONF_ADAPTER, default=adapters[0]): vol.In(adapters),
-                    vol.Required(CONF_PHONE_KEY, default=DEFAULT_PHONE_KEY): str,
+                    # The default key only for the first mesh; the next needs its own.
+                    vol.Required(
+                        CONF_PHONE_KEY, default=DEFAULT_PHONE_KEY if first else ""
+                    ): str,
                 }
             ),
             errors=errors,
@@ -135,11 +157,14 @@ class FastconOptionsFlow(OptionsFlow):
         )
         if user_input is not None:
             phone_key = user_input[CONF_PHONE_KEY].strip()
-            if _is_hex(phone_key, 8):
+            if not _is_hex(phone_key, 8):
+                errors[CONF_PHONE_KEY] = "invalid_key"
+            elif _phone_key_in_use(self.hass, phone_key, self.config_entry.entry_id):
+                errors[CONF_PHONE_KEY] = "key_in_use"
+            else:
                 return self.async_create_entry(
                     data={**user_input, CONF_PHONE_KEY: phone_key.upper()}
                 )
-            errors[CONF_PHONE_KEY] = "invalid_key"
 
         return self.async_show_form(
             step_id="settings",
@@ -214,6 +239,8 @@ class FastconOptionsFlow(OptionsFlow):
                 errors[CONF_DEVICE_TYPE] = "invalid_device_type"
             if not _is_hex(key, 8):
                 errors[CONF_DEVICE_KEY] = "invalid_key"
+            elif hub.other_hub_with(did.upper()) is not None:
+                errors[CONF_DEVICE_ID] = "device_in_other_mesh"
             if not errors:
                 hub.async_add_device(
                     FastconDevice(

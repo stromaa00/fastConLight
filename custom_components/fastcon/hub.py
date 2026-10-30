@@ -12,7 +12,7 @@ import statistics
 import time
 
 from homeassistant.components import bluetooth
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -68,6 +68,12 @@ RECENT_BROADCASTS = 1000  # kept for the diagnostics download
 LIGHT_BROADCAST_ADDRESS = "11:22:33:44:55:66"
 
 STORAGE_VERSION = 1
+
+
+def _send_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """One lock for all hubs: meshes may share an adapter (and its advertising
+    instance) and ESP32 transmitters, so only one command is on air at a time."""
+    return hass.data.setdefault(f"{DOMAIN}_send_lock", asyncio.Lock())
 
 
 @dataclass
@@ -232,6 +238,10 @@ class FastconHub:
             return
         did = found.did.hex().upper()
         if (device := self.devices.get(did)) is None:
+            # Discovery broadcasts don't say which mesh a light belongs to, so
+            # only one hub adopts a new light (see _adopts_new_lights).
+            if self.other_hub_with(did) is not None or not self._adopts_new_lights():
+                return
             used = {d.mesh_address for d in self.devices.values()}
             # Keep the address the device already has (e.g. from the BRMesh
             # app) if it's free, so nothing else in the mesh has to change.
@@ -489,6 +499,32 @@ class FastconHub:
         """False only for devices whose heartbeats stopped."""
         return did not in self._unavailable
 
+    def _hubs(self) -> list[FastconHub]:
+        """All running hubs (one per mesh), in config entry order."""
+        hubs: list[FastconHub] = []
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.entry_id == self.entry.entry_id:
+                hubs.append(self)
+            elif entry.state is ConfigEntryState.LOADED:
+                hubs.append(entry.runtime_data)
+        return hubs
+
+    def other_hub_with(self, did: str) -> FastconHub | None:
+        """Another mesh's hub that already knows this device, if any."""
+        return next(
+            (hub for hub in self._hubs() if hub is not self and did in hub.devices),
+            None,
+        )
+
+    def _adopts_new_lights(self) -> bool:
+        """Whether a newly discovered light goes to this hub.
+
+        With several meshes, the first hub with auto-bind on takes it; if
+        none has auto-bind on, the first hub does.
+        """
+        hubs = self._hubs()
+        return next((hub for hub in hubs if hub.auto_bind), hubs[0]) is self
+
     def next_free_address(self) -> int:
         """Lowest mesh address (1-255) not used by a known device."""
         used = {device.mesh_address for device in self.devices.values()}
@@ -692,7 +728,8 @@ class FastconHub:
                 self._sent_sequences.append(self._builder.last_sequence)
                 self._sent_payloads.append(payload)
                 _LOGGER.debug("Sending %s: %s", key, payload.hex())
-                errors = await self._async_broadcast(key, payload)
+                async with _send_lock(self.hass):
+                    errors = await self._async_broadcast(key, payload)
                 self._record_sent(
                     action(), device, payload, "; ".join(errors) if errors else None
                 )

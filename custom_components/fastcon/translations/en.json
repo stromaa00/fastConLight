@@ -3,18 +3,20 @@
     "step": {
       "user": {
         "title": "BRMesh via Home Assistant Bluetooth",
-        "description": "Commands are broadcast from this Bluetooth adapter. Use the phone key from the BRMesh app if your lights are already set up there.",
+        "description": "Commands are broadcast from this Bluetooth adapter. Use the phone key from the BRMesh app if your lights are already set up there. Each mesh (phone key) is added as its own entry; several meshes can share one adapter.",
         "data": {
+          "name": "Mesh name",
           "adapter": "Bluetooth adapter",
           "phone_key": "Phone key (8 hex characters)"
         }
       }
     },
     "error": {
-      "invalid_key": "Must be exactly 8 hex characters, e.g. A1A2A3A4."
+      "invalid_key": "Must be exactly 8 hex characters, e.g. A1A2A3A4.",
+      "key_in_use": "Another BRMesh mesh already uses this phone key."
     },
     "abort": {
-      "already_configured": "BRMesh is already set up.",
+      "already_configured": "BRMesh is already set up. Add another mesh with Add entry.",
       "single_instance_allowed": "BRMesh is already set up.",
       "not_supported": "This device is not a BRMesh light.",
       "bluez_unavailable": "Could not reach BlueZ over D-Bus. This option needs Home Assistant running on Linux (Home Assistant OS, Supervised, or Docker with /run/dbus mounted).",
@@ -60,6 +62,8 @@
     },
     "error": {
       "invalid_key": "Must be exactly 8 hex characters.",
+      "key_in_use": "Another BRMesh mesh already uses this phone key.",
+      "device_in_other_mesh": "This light already belongs to another BRMesh mesh. Delete it there first.",
       "invalid_device_id": "Must be exactly 12 hex characters.",
       "invalid_device_type": "Must be exactly 4 hex characters, e.g. A8A1."
     },
