@@ -68,6 +68,16 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(body[5], 7)
         self.assertEqual(body[6:12], bytes((0x80 | 100, 0, 255, 0, 0, 0)))
 
+    def test_all_lights_command_targets_address_zero(self):
+        phone_key = bytes.fromhex("A1A2A3A4")
+        packet = protocol.CommandBuilder(10).light(
+            protocol.ALL_LIGHTS_ADDRESS, phone_key, protocol.light_off()
+        )
+        _, body = decode(packet, phone_key)
+        self.assertEqual(body[4], 2 | (2 << 4))
+        self.assertEqual(body[5], 0)
+        self.assertEqual(body[6], 0)
+
     def test_bind_command_round_trip(self):
         phone_key = bytes.fromhex("A1A2A3A4")
         device_key = bytes.fromhex("5E367BC4")

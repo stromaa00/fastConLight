@@ -47,6 +47,7 @@ from .const import (
     signal_new_device,
 )
 from .protocol import (
+    ALL_LIGHTS_ADDRESS,
     DEFAULT_ENCRYPT_KEY,
     MANUFACTURER_ID,
     CommandBuilder,
@@ -655,6 +656,20 @@ class FastconHub:
             lambda: self._builder.light(device.mesh_address, self.phone_key, command),
             lambda: describe_command(command),
             device,
+        )
+
+    @callback
+    def async_send_all(self, command: bytes) -> None:
+        """Queue a light command for every light in the mesh at once.
+
+        Unsent commands for single lights are dropped, as this one overrides them.
+        """
+        for key in [key for key in self._pending if key.startswith("light:")]:
+            del self._pending[key]
+        self._queue(
+            "light:all",
+            lambda: self._builder.light(ALL_LIGHTS_ADDRESS, self.phone_key, command),
+            lambda: f"all lights: {describe_command(command)}",
         )
 
     def _queue(

@@ -225,6 +225,11 @@ class CommandBuilder:
         )
 
 
+# Mesh address that every light in the mesh accepts. The BRMesh app sends its
+# time sync there; that lights also follow control commands to it is untested.
+ALL_LIGHTS_ADDRESS = 0
+
+
 def light_off() -> bytes:
     """Turn a light off."""
     return bytes((0,))

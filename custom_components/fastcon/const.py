@@ -54,6 +54,11 @@ def signal_availability(entry_id: str) -> str:
     return f"{DOMAIN}_availability_{entry_id}"
 
 
+def signal_all_lights(entry_id: str) -> str:
+    """Dispatcher signal sent when a command goes to all lights of a hub."""
+    return f"{DOMAIN}_all_lights_{entry_id}"
+
+
 def signal_device_updated(entry_id: str) -> str:
     """Dispatcher signal sent when a device's settings (e.g. mesh address) change."""
     return f"{DOMAIN}_device_updated_{entry_id}"

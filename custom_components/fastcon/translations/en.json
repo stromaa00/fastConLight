@@ -92,6 +92,11 @@
       "mesh_address": {
         "name": "Mesh address"
       }
+    },
+    "light": {
+      "all_lights": {
+        "name": "All lights"
+      }
     }
   }
 }
