@@ -40,7 +40,7 @@ Lights already set up in ESPHome can be added under the integration's **Configur
 
 **Replacing the BRMesh app:** enter the app's mesh key as the phone key (**Configure → Settings**), press **Scan for devices**, and stop using the app. New lights keep their app address if it's free; turn on **Auto-bind discovered lights** if Home Assistant should bind them itself. Details: [SPECIFICATION.md §7.3](SPECIFICATION.md).
 
-**Several meshes:** each phone key is its own mesh. Add another one with **Settings → Devices & Services → BRMesh / Fastcon → Add entry** and give it a name and its phone key; it can use the same adapter. Newly discovered lights go to the mesh whose **Auto-bind discovered lights** is on (otherwise to the first mesh), so turn auto-bind on in the mesh you are pairing lights for.
+**Several meshes:** each phone key is its own mesh. Add another one with **Settings → Devices & Services → BRMesh / Fastcon → Add entry** and give it a name and its phone key; it can use the same adapter. Newly discovered lights go to the mesh where you last pressed **Scan for devices** (for 2 minutes after the scan); otherwise to the mesh whose **Auto-bind discovered lights** is on, or to the first mesh. A light that already went to the wrong mesh: delete it there, power cycle it and scan again in the right mesh.
 
 ---
 

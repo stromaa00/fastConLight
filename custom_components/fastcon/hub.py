@@ -40,6 +40,7 @@ from .const import (
     HEARTBEAT_BURST_GAP,
     MIN_HEARTBEAT_SAMPLES,
     MISSED_HEARTBEATS,
+    SCAN_ADOPT_WINDOW,
     UNAVAILABLE_AFTER,
     signal_availability,
     signal_device_updated,
@@ -148,6 +149,8 @@ class FastconHub:
         self._pending_bind: set[str] = set()
         # Bind discovered lights automatically; off unless the user turns it on
         self.auto_bind = False
+        # Monotonic time of this mesh's last scan, to adopt the lights it finds
+        self.last_scan: float | None = None
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
         # BRMesh broadcasts received since setup, to tell "nothing received"
         # apart from "received but not understood" in the diagnostics
@@ -519,10 +522,19 @@ class FastconHub:
     def _adopts_new_lights(self) -> bool:
         """Whether a newly discovered light goes to this hub.
 
-        With several meshes, the first hub with auto-bind on takes it; if
-        none has auto-bind on, the first hub does.
+        With several meshes, the hub that scanned most recently takes it
+        (within SCAN_ADOPT_WINDOW); otherwise the first hub with auto-bind on,
+        or the first hub if none has auto-bind on.
         """
         hubs = self._hubs()
+        now = time.monotonic()
+        scanning = [
+            hub
+            for hub in hubs
+            if hub.last_scan is not None and now - hub.last_scan < SCAN_ADOPT_WINDOW
+        ]
+        if scanning:
+            return max(scanning, key=lambda hub: hub.last_scan) is self
         return next((hub for hub in hubs if hub.auto_bind), hubs[0]) is self
 
     def next_free_address(self) -> int:
@@ -569,6 +581,7 @@ class FastconHub:
     @callback
     def async_scan(self) -> None:
         """Ask unbound lights to announce themselves."""
+        self.last_scan = time.monotonic()
         self._queue(
             "scan",
             lambda: self._builder.scan(forward=self.relay_scan),

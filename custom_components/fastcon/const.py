@@ -43,6 +43,9 @@ HEARTBEAT_BURST_GAP = 60  # seconds
 # A light repeats its discovery broadcast many times a second after a scan;
 # bind it at most once per this many seconds.
 AUTO_BIND_COOLDOWN = 60  # seconds
+# With several meshes, lights discovered this long after a mesh's scan go to
+# that mesh.
+SCAN_ADOPT_WINDOW = 120  # seconds
 AVAILABILITY_CHECK_INTERVAL = 30  # seconds
 
 
