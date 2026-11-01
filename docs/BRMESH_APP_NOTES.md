@@ -339,6 +339,15 @@ So the app's "all on" addresses **all lights of one device type** (control type 
 
 **Type filter test** (user's two lights, their app mesh key, 2026-11-01): `off type:A82A` (RGBCW) and `off type:A8A1` (RGBW) each switch **both** lights; `off type:A82B` (CCT) switches neither. The lights relay it (data `43 2b a8 00 00`) but don't execute it. So the device type is a filter, but RGBW/RGBCW lights accept each other's type (or RGBW lights also accept RGBCW, the type the app uses for groups) *(open: exact types of the two lights)*. The integration therefore sends one command per light type in the mesh.
 
+**Groups ("Flur", user captures 2026-11-01, decrypted; raw frames left out):**
+```
+add light 2 to Flur:  21 02 01   control type 1, not forwarded: [1 | 2 << 4] [mesh address] [group id]
+add light 4 to Flur:  21 04 01
+remove light 4:       21 04 00   group 0 = no group
+Flur off:             43 2a a8 01 00   control type 3 with group id 1 (all off was group 0)
+```
+So control type 3 is `[3 | (len + 3) << 4] [type lo] [type hi] [group] [command]`: **group 0 = all lights**, other ids = fixed groups. Groups are plain old-protocol commands, not the `a5 5a` frames. Implemented: `CommandBuilder.assign_group()`, `light_by_type(..., group=)`; debug tool `group add/remove` and targets `group:<id>`; integration 2.21.0: groups under Configure → Groups, one light entity per group. A light stores one group byte, so it is in at most one group; assigning another group replaces it, group 0 removes it. Open: how the app picks ids (1, 2, …?), whether the heartbeat's group byte shows the group.
+
 **Discovery from a light (test data):** type `a1 a8` = 43169 Light RGBW, used in `test_describe_action_from_real_broadcasts`.
 
 ## 9. Open questions

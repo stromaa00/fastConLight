@@ -21,8 +21,9 @@ CMD_DISCOVERY_RESPONSE = 2
 CMD_SINGLE_CONTROL = 5
 
 # Control types (low nibble of the first data byte of a control command)
+CONTROL_GROUP_ASSIGN = 1  # put one light into a group (app: add a light to a group)
 CONTROL_SINGLE = 2  # one mesh address
-CONTROL_BY_TYPE = 3  # every light of one device type ("all on/off" in the app)
+CONTROL_BY_TYPE = 3  # lights of one device type in a group (group 0 = all)
 
 # Device type codes (see SPECIFICATION.md section 5)
 LIGHT_RGBCW = 43050
@@ -262,19 +263,38 @@ class CommandBuilder:
             i2=mesh_address // 256,
         )
 
-    def light_by_type(self, device_type: int, phone_key: bytes, command: bytes) -> bytes:
-        """Control command for every light of one device type.
+    def light_by_type(
+        self, device_type: int, phone_key: bytes, command: bytes, group: int = 0
+    ) -> bytes:
+        """Control command for every light of one device type in a group.
 
-        This is how the BRMesh app switches all lights: control type 3, the
-        device type (little endian), a zero byte, then the command, e.g.
-        43 2a a8 00 80 (all RGBCW on) and 43 2a a8 00 00 (all RGBCW off).
+        This is how the BRMesh app switches all lights and groups: control
+        type 3, the device type (little endian), the group id (0 = all lights),
+        then the command, e.g. 43 2a a8 00 00 (all RGBCW off) and
+        43 2a a8 01 00 (RGBCW lights in group 1 off).
         """
         data = bytearray(12)
         data[0] = (CONTROL_BY_TYPE | ((len(command) + 3) << 4)) & 0xFF
         data[1] = device_type & 0xFF
         data[2] = (device_type >> 8) & 0xFF
+        data[3] = group & 0xFF
         data[4 : 4 + len(command)] = command
         return self.generate(CMD_SINGLE_CONTROL, bytes(data), phone_key, forward=True)
+
+    def assign_group(self, mesh_address: int, phone_key: bytes, group: int) -> bytes:
+        """Put the light at a mesh address into a group, as the app does.
+
+        Control type 1 to the light, not forwarded: 21 <address> <group>.
+        A light is in at most one group; group 0 removes it from its group.
+        """
+        data = bytearray(12)
+        data[0] = (CONTROL_GROUP_ASSIGN | (2 << 4)) & 0xFF
+        data[1] = mesh_address & 0xFF
+        data[2] = group & 0xFF
+        return self.generate(
+            CMD_SINGLE_CONTROL, bytes(data), phone_key, forward=False,
+            i2=mesh_address // 256,
+        )
 
 
 # Mesh address that every light in the mesh accepts. The BRMesh app sends its
@@ -477,9 +497,10 @@ def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
     if header_type == 5 and info["checksum_ok"] and len(content) >= 2:
         info["control_type"] = content[0] & 0x0F
         if info["control_type"] == CONTROL_BY_TYPE and len(content) >= 4:
-            # By device type: type (2, little endian), 00, command
+            # By device type: type (2, little endian), group, command
             length = (content[0] >> 4) - 3
             info["target_device_type"] = content[1] | (content[2] << 8)
+            info["group"] = content[3]
             info["command"] = content[4 : 4 + max(length, 0)].hex()
         else:
             # Single control: data[0] = 2 | (len + 1) << 4, data[1] = mesh address
@@ -561,10 +582,17 @@ def describe_action(info: dict) -> str:
         if info.get("control_type") == CONTROL_SINGLE:
             return describe_command(bytes.fromhex(info.get("command", "")))
         if info.get("control_type") == CONTROL_BY_TYPE:
-            return (
-                f"all {device_type_name(info.get('target_device_type', 0))} lights: "
-                f"{describe_command(bytes.fromhex(info.get('command', '')))}"
+            name = device_type_name(info.get("target_device_type", 0))
+            target = (
+                f"group {info['group']} {name} lights" if info.get("group") else f"all {name} lights"
             )
+            return f"{target}: {describe_command(bytes.fromhex(info.get('command', '')))}"
+        if info.get("control_type") == CONTROL_GROUP_ASSIGN:
+            command = bytes.fromhex(info.get("command", ""))
+            group = command[0] if command else None
+            if group == 0:
+                return f"remove the light at mesh address {info.get('mesh_address')} from its group"
+            return f"put the light at mesh address {info.get('mesh_address')} into group {group}"
         if info.get("control_type") == 9:
             return describe_time_sync(bytes.fromhex(info.get("command", "")))
         return f"control type {info.get('control_type')}: {info.get('data')}"

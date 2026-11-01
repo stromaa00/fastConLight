@@ -124,6 +124,26 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(info["target_device_type"], 43050)
         self.assertEqual(protocol.describe_action(info), "all Light RGBCW lights: light off")
 
+    def test_group_commands_match_the_app(self):
+        # Decrypted app captures: add lights 2 and 4 to group "Flur" (id 1),
+        # then switch the group off
+        key = bytes.fromhex("A1A2A3A4")
+        builder = protocol.CommandBuilder(1)
+        add = protocol.describe_broadcast(builder.assign_group(4, key, 1), key)
+        self.assertTrue(add["data"].startswith("210401"))
+        self.assertFalse(add["forward"])
+        self.assertEqual(protocol.describe_action(add), "put the light at mesh address 4 into group 1")
+        remove = protocol.describe_broadcast(builder.assign_group(4, key, 0), key)
+        self.assertTrue(remove["data"].startswith("210400"))
+        self.assertEqual(
+            protocol.describe_action(remove), "remove the light at mesh address 4 from its group"
+        )
+        off = protocol.describe_broadcast(
+            builder.light_by_type(43050, key, protocol.light_off(), group=1), key
+        )
+        self.assertTrue(off["data"].startswith("432aa80100"))
+        self.assertEqual(protocol.describe_action(off), "group 1 Light RGBCW lights: light off")
+
     def test_bind_command_round_trip(self):
         phone_key = bytes.fromhex("A1A2A3A4")
         device_key = bytes.fromhex("5E367BC4")

@@ -42,6 +42,13 @@ from .const import (
     TRANSMITTER_ACTION_SUFFIX,
 )
 from .hub import FastconDevice
+from .protocol import is_light
+
+CONF_GROUP = "group"
+CONF_GROUP_ID = "group_id"
+CONF_LIGHTS = "lights"
+CONF_DELETE = "delete"
+NEW_GROUP = "new"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -139,7 +146,106 @@ class FastconOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Show the menu."""
-        return self.async_show_menu(step_id="init", menu_options=["settings", "add_device"])
+        return self.async_show_menu(
+            step_id="init", menu_options=["settings", "groups", "add_device"]
+        )
+
+    async def async_step_groups(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick a group to change, or start a new one."""
+        if self.config_entry.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="not_loaded")
+        hub = self.config_entry.runtime_data
+        if user_input is not None or not hub.groups:
+            choice = (user_input or {}).get(CONF_GROUP, NEW_GROUP)
+            self._group_id = None if choice == NEW_GROUP else int(choice)
+            return await self.async_step_group_edit()
+        options = [selector.SelectOptionDict(value=NEW_GROUP, label="+")] + [
+            selector.SelectOptionDict(value=str(gid), label=f"{name} ({gid})")
+            for gid, name in sorted(hub.groups.items())
+        ]
+        return self.async_show_form(
+            step_id="groups",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_GROUP, default=NEW_GROUP): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=options,
+                            mode=selector.SelectSelectorMode.LIST,
+                            translation_key="group_choice",
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_group_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Name, id and lights of a group; saving sends the memberships."""
+        hub = self.config_entry.runtime_data
+        group_id = getattr(self, "_group_id", None)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if group_id is not None and user_input.get(CONF_DELETE):
+                hub.async_delete_group(group_id)
+                return self.async_create_entry(data=dict(self.config_entry.options))
+            name = user_input[CONF_NAME].strip()
+            new_id = group_id if group_id is not None else int(user_input[CONF_GROUP_ID])
+            if not name:
+                errors[CONF_NAME] = "name_required"
+            elif group_id is None and new_id in hub.groups:
+                errors[CONF_GROUP_ID] = "group_id_in_use"
+            else:
+                hub.async_save_group(new_id, name, user_input.get(CONF_LIGHTS, []))
+                return self.async_create_entry(data=dict(self.config_entry.options))
+
+        lights = sorted(
+            (d for d in hub.devices.values() if is_light(d.device_type)),
+            key=lambda d: d.mesh_address,
+        )
+        light_options = [
+            selector.SelectOptionDict(
+                value=d.did,
+                label=f"BRMesh {d.name} (address {d.mesh_address})"
+                + (
+                    f" - now in {hub.groups.get(d.group, d.group)}"
+                    if d.group and d.group != group_id
+                    else ""
+                ),
+            )
+            for d in lights
+        ]
+        schema: dict = {
+            vol.Required(
+                CONF_NAME, default=hub.groups.get(group_id, "") if group_id else ""
+            ): str,
+        }
+        if group_id is None:
+            schema[vol.Required(CONF_GROUP_ID, default=hub.next_free_group())] = vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=255)
+            )
+        schema[
+            vol.Optional(
+                CONF_LIGHTS,
+                default=[d.did for d in lights if group_id and d.group == group_id],
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=light_options,
+                multiple=True,
+                mode=selector.SelectSelectorMode.LIST,
+            )
+        )
+        if group_id is not None:
+            schema[vol.Optional(CONF_DELETE, default=False)] = bool
+        return self.async_show_form(
+            step_id="group_edit",
+            data_schema=vol.Schema(schema),
+            errors=errors,
+            description_placeholders={"group_id": str(group_id or "")},
+        )
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None

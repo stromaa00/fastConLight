@@ -54,8 +54,13 @@ def signal_availability(entry_id: str) -> str:
     return f"{DOMAIN}_availability_{entry_id}"
 
 
+def signal_groups_changed(entry_id: str) -> str:
+    """Dispatcher signal sent when groups are added, renamed or deleted."""
+    return f"{DOMAIN}_groups_changed_{entry_id}"
+
+
 def signal_all_lights(entry_id: str) -> str:
-    """Dispatcher signal sent when a command goes to all lights of a hub."""
+    """Dispatcher signal sent when a command goes to all lights or a group of a hub."""
     return f"{DOMAIN}_all_lights_{entry_id}"
 
 

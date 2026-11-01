@@ -28,6 +28,7 @@
       "init": {
         "menu_options": {
           "settings": "Settings",
+          "groups": "Groups",
           "add_device": "Add a light manually"
         }
       },
@@ -58,6 +59,26 @@
           "device_key": "Device key (8 hex characters)",
           "mesh_address": "Mesh address"
         }
+      },
+      "groups": {
+        "title": "Groups",
+        "description": "Pick a group to change or delete, or + for a new one.",
+        "data": {
+          "group": "Group"
+        }
+      },
+      "group_edit": {
+        "title": "Group",
+        "description": "A light can be in only one group; selecting it here moves it out of its current group. Saving sends the changes to the lights, which must be in range. Each group becomes a light entity that switches all its lights with one command per light type, like the BRMesh app.",
+        "data": {
+          "name": "Name",
+          "group_id": "Group id",
+          "lights": "Lights",
+          "delete": "Delete this group"
+        },
+        "data_description": {
+          "group_id": "1-255. Use the id of a group made in the BRMesh app to take it over (Flur is usually 1)."
+        }
       }
     },
     "error": {
@@ -65,7 +86,9 @@
       "key_in_use": "Another BRMesh mesh already uses this phone key.",
       "device_in_other_mesh": "This light already belongs to another BRMesh mesh. Delete it there first.",
       "invalid_device_id": "Must be exactly 12 hex characters.",
-      "invalid_device_type": "Must be exactly 4 hex characters, e.g. A8A1."
+      "invalid_device_type": "Must be exactly 4 hex characters, e.g. A8A1.",
+      "name_required": "Enter a name.",
+      "group_id_in_use": "Another group already uses this id."
     },
     "abort": {
       "not_loaded": "The integration must be loaded to add lights."
@@ -101,6 +124,13 @@
     "sensor": {
       "bound_mesh_address": {
         "name": "Bound mesh address"
+      }
+    }
+  },
+  "selector": {
+    "group_choice": {
+      "options": {
+        "new": "+ New group"
       }
     }
   }

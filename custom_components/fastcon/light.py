@@ -13,12 +13,18 @@ from homeassistant.components.light import (
 )
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import FastconConfigEntry
-from .const import signal_all_lights, signal_availability, signal_new_device
+from .const import (
+    signal_all_lights,
+    signal_availability,
+    signal_groups_changed,
+    signal_new_device,
+)
 from .entity import hub_device_info, light_device_info
 from .hub import FastconDevice, FastconHub
 from .protocol import (
@@ -63,6 +69,21 @@ async def async_setup_entry(
         FastconLight(hub, device)
         for device in hub.devices.values()
         if is_light(device.device_type)
+    )
+    added_groups = set(hub.groups)
+    async_add_entities(FastconGroupLight(hub, gid) for gid in hub.groups)
+
+    @callback
+    def _async_groups_changed() -> None:
+        # New groups get an entity; deleted ones remove their own
+        new = set(hub.groups) - added_groups
+        added_groups.update(new)
+        added_groups.intersection_update(hub.groups)
+        if new:
+            async_add_entities(FastconGroupLight(hub, gid) for gid in sorted(new))
+
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, signal_groups_changed(entry.entry_id), _async_groups_changed)
     )
 
     @callback
@@ -176,8 +197,10 @@ class FastconLight(_FastconLightBase):
         )
 
     @callback
-    def _async_follow_all(self, all_lights: FastconAllLights) -> None:
-        """Take over the state sent to all lights, as far as this light supports it."""
+    def _async_follow_all(self, all_lights: _FastconLightBase, group: int | None = None) -> None:
+        """Take over the state sent to all lights or this light's group."""
+        if group is not None and self._device.group != group:
+            return
         self._attr_is_on = all_lights.is_on
         if all_lights.is_on:
             self._attr_brightness = all_lights.brightness
@@ -213,3 +236,67 @@ class FastconAllLights(_FastconLightBase):
         """Turn all lights off; the single lights take over the state."""
         await super().async_turn_off(**kwargs)
         async_dispatcher_send(self.hass, signal_all_lights(self._hub.entry.entry_id), self)
+
+
+class FastconGroupLight(_FastconLightBase):
+    """A group of lights (set up under Configure -> Groups).
+
+    Switched like the BRMesh app does: one command per device type of its
+    lights, addressed to the group id. Its lights take over the state.
+    """
+
+    def __init__(self, hub: FastconHub, group_id: int) -> None:
+        super().__init__(hub, {ColorMode.RGB, ColorMode.WHITE})
+        self._group_id = group_id
+        self._attr_unique_id = f"{hub.entry.entry_id}_group_{group_id}"
+        self._attr_device_info = hub_device_info(hub)
+
+    @property
+    def name(self) -> str:
+        """The group's name as set in the options."""
+        return self._hub.groups.get(self._group_id, f"Group {self._group_id}")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Group id and the lights in it."""
+        return {
+            "group_id": self._group_id,
+            "lights": [d.name for d in self._hub.group_members(self._group_id)],
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Follow renames and remove itself when the group is deleted."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, signal_groups_changed(self._hub.entry.entry_id), self._async_groups_changed
+            )
+        )
+
+    @callback
+    def _async_groups_changed(self) -> None:
+        if self._group_id in self._hub.groups:
+            self.async_write_ha_state()
+            return
+        registry = er.async_get(self.hass)
+        if registry.async_get(self.entity_id):
+            registry.async_remove(self.entity_id)
+        else:
+            self.hass.async_create_task(self.async_remove())
+
+    def _send(self, command: bytes) -> None:
+        self._hub.async_send_group(self._group_id, command)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the group on; its lights take over the state."""
+        await super().async_turn_on(**kwargs)
+        async_dispatcher_send(
+            self.hass, signal_all_lights(self._hub.entry.entry_id), self, self._group_id
+        )
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the group off; its lights take over the state."""
+        await super().async_turn_off(**kwargs)
+        async_dispatcher_send(
+            self.hass, signal_all_lights(self._hub.entry.entry_id), self, self._group_id
+        )

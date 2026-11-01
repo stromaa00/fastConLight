@@ -44,6 +44,7 @@ from .const import (
     UNAVAILABLE_AFTER,
     signal_availability,
     signal_device_updated,
+    signal_groups_changed,
     signal_new_device,
 )
 from .protocol import (
@@ -93,6 +94,8 @@ class FastconDevice:
     # A bind to new_address was sent; mesh_address changes once a heartbeat
     # from new_address confirms the light took it
     bind_sent: bool = False
+    # Group the light is in (0 = none); a light is in at most one group
+    group: int = 0
 
     @property
     def bind_address(self) -> int:
@@ -162,6 +165,8 @@ class FastconHub:
         self._pending_bind: set[str] = set()
         # Bind discovered lights automatically; off unless the user turns it on
         self.auto_bind = False
+        # Group id -> name; members are the devices whose group is that id
+        self.groups: dict[int, str] = {}
         # Monotonic time of this mesh's last scan, to adopt the lights it finds
         self.last_scan: float | None = None
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
@@ -179,6 +184,7 @@ class FastconHub:
         """Load stored devices and start listening and sending."""
         stored = await self._store.async_load() or {}
         self.auto_bind = stored.get("auto_bind", False)
+        self.groups = {int(gid): name for gid, name in stored.get("groups", {}).items()}
         for data in stored.get("devices", []):
             device = FastconDevice(**data)
             self.devices[device.did] = device
@@ -598,15 +604,92 @@ class FastconHub:
         self._last_auto_bind.clear()
         self._async_save()
 
+    def _data_to_save(self) -> dict:
+        return {
+            "devices": [asdict(d) for d in self.devices.values()],
+            "auto_bind": self.auto_bind,
+            "groups": {str(gid): name for gid, name in self.groups.items()},
+        }
+
     @callback
     def _async_save(self) -> None:
-        self._store.async_delay_save(
-            lambda: {
-                "devices": [asdict(d) for d in self.devices.values()],
-                "auto_bind": self.auto_bind,
-            },
-            1,
+        self._store.async_delay_save(self._data_to_save, 1)
+
+    def group_members(self, group_id: int) -> list[FastconDevice]:
+        """Lights in a group."""
+        return [
+            d for d in self.devices.values() if d.group == group_id and is_light(d.device_type)
+        ]
+
+    def next_free_group(self) -> int:
+        """Lowest group id (1-255) not in use."""
+        return next((gid for gid in range(1, 256) if gid not in self.groups), 255)
+
+    @callback
+    def async_save_group(self, group_id: int, name: str, dids: list[str]) -> None:
+        """Create or change a group and send the new memberships to the lights.
+
+        A light is in at most one group, so adding it here moves it out of
+        any other group; lights no longer selected leave the group (group 0).
+        """
+        if not 1 <= group_id <= 255:
+            raise ServiceValidationError(f"Group id {group_id} is not between 1 and 255")
+        self.groups[group_id] = name
+        for device in self.devices.values():
+            if not is_light(device.device_type):
+                continue
+            if device.did in dids and device.group != group_id:
+                self._async_assign_group(device, group_id)
+            elif device.did not in dids and device.group == group_id:
+                self._async_assign_group(device, 0)
+        self._async_save()
+        async_dispatcher_send(self.hass, signal_groups_changed(self.entry.entry_id))
+
+    @callback
+    def async_delete_group(self, group_id: int) -> None:
+        """Delete a group and take its lights out of it."""
+        for device in self.group_members(group_id):
+            self._async_assign_group(device, 0)
+        self.groups.pop(group_id, None)
+        self._async_save()
+        async_dispatcher_send(self.hass, signal_groups_changed(self.entry.entry_id))
+
+    @callback
+    def _async_assign_group(self, device: FastconDevice, group_id: int) -> None:
+        _LOGGER.info(
+            "BRMesh %s (mesh address %d): group %d -> %d",
+            device.name, device.mesh_address, device.group, group_id,
         )
+        device.group = group_id
+        self._queue(
+            f"group:{device.did}",
+            lambda: self._builder.assign_group(device.mesh_address, self.phone_key, device.group),
+            lambda: (
+                f"put into group {device.group}" if device.group else "remove from its group"
+            ),
+            device,
+        )
+
+    @callback
+    def async_send_group(self, group_id: int, command: bytes) -> None:
+        """Queue a light command for a group: one per device type of its lights.
+
+        Unsent commands for its single lights are dropped, as these override them.
+        """
+        members = self.group_members(group_id)
+        for device in members:
+            self._pending.pop(f"light:{device.did}", None)
+        for device_type in sorted({d.device_type for d in members}):
+            self._queue(
+                f"light:group:{group_id}:{device_type}",
+                lambda t=device_type: self._builder.light_by_type(
+                    t, self.phone_key, command, group_id
+                ),
+                lambda t=device_type: (
+                    f"group {self.groups.get(group_id, group_id)} "
+                    f"({device_type_name(t)}): {describe_command(command)}"
+                ),
+            )
 
     @callback
     def async_scan(self) -> None:

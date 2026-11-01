@@ -119,6 +119,7 @@ BRMesh packets are 31 bytes and fit a legacy (Bluetooth 4.x) advertisement, whic
 - **RAM:** 520KB minimum (BLE + WiFi operation)
 - **BLE:** Extended advertising callbacks support
 - **WiFi:** 2.4GHz network
+- **Groups:** a light stores one group id (0 = none). **Configure → Groups** saves a group (id 1–255, name, lights) and sends control type 1 `21 <mesh address> <group>` (not forwarded) to every light that joins or leaves (group 0). Groups and memberships are stored with the devices. Details and captures: [docs/BRMESH_APP_NOTES.md](docs/BRMESH_APP_NOTES.md#7-groups).
 - **Storage:** Custom partition table for ESP32-C6
 
 ### 3.3 ESPHome Configuration Files
@@ -354,6 +355,7 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 | `sensor.brmesh_<name>_bound_mesh_address` | Read-only: the mesh address commands go to. Changes only through Mesh address + Bind and a confirming heartbeat from the new address (or auto-bind of a new light). Attributes: `pending_address` (chosen, not yet confirmed) and `waiting_for_heartbeat` (bind sent). Heartbeats carry no DID, so a heartbeat from the new address confirms every light with a bind sent there, including when another light already uses it |
 | `switch.<hub>_auto_bind_discovered_lights` | When on, lights found by a scan are bound automatically (off by default, saved) |
 | `light.brmesh_<name>` | One per light; assumed state, restored after restart |
+| `light.<hub>_<group name>` | One per group from **Configure → Groups**: control type 3 with the group id, one command per light type of its members; attributes `group_id`, `lights`. Members take over its state |
 
 **Setup**
 
