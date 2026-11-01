@@ -642,6 +642,17 @@ class FastconHub:
         async_dispatcher_send(self.hass, signal_effects_changed(self.entry.entry_id))
 
     @callback
+    def async_add_builtin_effects(self) -> int:
+        """Add the app's predefined effects that are missing (by name)."""
+        names = {e["name"] for e in self.effects}
+        missing = [copy.deepcopy(e) for e in DEFAULT_EFFECTS if e["name"] not in names]
+        if missing:
+            self.effects.extend(missing)
+            self._async_save()
+            async_dispatcher_send(self.hass, signal_effects_changed(self.entry.entry_id))
+        return len(missing)
+
+    @callback
     def async_delete_effect(self, name: str) -> None:
         """Delete an effect."""
         self.effects = [e for e in self.effects if e["name"] != name]

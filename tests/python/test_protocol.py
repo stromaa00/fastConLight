@@ -170,6 +170,9 @@ class ProtocolTest(unittest.TestCase):
             [c["red"], c["magenta"], c["blue"], c["cyan"], c["green"], c["yellow"]],
         )
         self.assertTrue(protocol.describe_broadcast(full, key)["data"].startswith("881001420301050406"))
+        # "Fresh" (app Mod3: cyan, blue, green) at speed 42 = the third capture
+        fresh = builder.scene(16, key, 42, protocol.EFFECT_MODE_FADE, [c["cyan"], c["blue"], c["green"]])
+        self.assertTrue(protocol.describe_broadcast(fresh, key)["data"].startswith("58102a450104"))
         single = builder.scene(16, key, 50, protocol.EFFECT_MODE_JUMP, [c["red"]])
         self.assertTrue(protocol.describe_broadcast(single, key)["data"].startswith("4810320200"))
 

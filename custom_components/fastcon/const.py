@@ -54,14 +54,32 @@ def signal_availability(entry_id: str) -> str:
     return f"{DOMAIN}_availability_{entry_id}"
 
 
-# Effects every mesh starts with (Configure -> Effects); colours are names from
-# protocol.EFFECT_COLORS, mode "fade" or "jump", speed 1-100
+# Effects every mesh starts with (Configure -> Effects): the BRMesh app's 21
+# predefined effects (Mod1-Mod21) with their colours. Colours are names from
+# protocol.EFFECT_COLORS; mode "fade" or "jump" (the app's mode 0 / 1, "flash");
+# speed 1-100.
 DEFAULT_EFFECTS = [
-    {"name": "Full color fade", "mode": "fade", "speed": 50,
-     "colors": ["red", "magenta", "blue", "cyan", "green", "yellow"]},
-    {"name": "Full color jump", "mode": "jump", "speed": 50,
-     "colors": ["red", "magenta", "blue", "cyan", "green", "yellow"]},
-    {"name": "Romantic", "mode": "fade", "speed": 30, "colors": ["magenta", "red"]},
+    {"name": "Full color fade", "mode": "fade", "speed": 50, "colors": ["red", "magenta", "blue", "cyan", "green", "yellow"]},
+    {"name": "Romantic", "mode": "fade", "speed": 50, "colors": ["magenta", "red"]},
+    {"name": "Fresh", "mode": "fade", "speed": 50, "colors": ["cyan", "blue", "green"]},
+    {"name": "Cozy", "mode": "fade", "speed": 50, "colors": ["yellow", "red"]},
+    {"name": "Full color flash", "mode": "jump", "speed": 50, "colors": ["red", "magenta", "blue", "cyan", "green", "yellow"]},
+    {"name": "Three color flash", "mode": "jump", "speed": 50, "colors": ["red", "green", "blue"]},
+    {"name": "Yellow and green flash", "mode": "jump", "speed": 50, "colors": ["yellow", "green"]},
+    {"name": "Purple and green flash", "mode": "jump", "speed": 50, "colors": ["magenta", "green"]},
+    {"name": "Purple and blue flash", "mode": "jump", "speed": 50, "colors": ["magenta", "blue"]},
+    {"name": "Yellow and purple flash", "mode": "jump", "speed": 50, "colors": ["yellow", "magenta"]},
+    {"name": "Red and green flash", "mode": "jump", "speed": 50, "colors": ["red", "green"]},
+    {"name": "Red and blue flash", "mode": "jump", "speed": 50, "colors": ["red", "blue"]},
+    {"name": "Green and blue flash", "mode": "jump", "speed": 50, "colors": ["green", "blue"]},
+    {"name": "Red flash", "mode": "jump", "speed": 50, "colors": ["red", "off"]},
+    {"name": "Green flash", "mode": "jump", "speed": 50, "colors": ["green", "off"]},
+    {"name": "Blue flash", "mode": "jump", "speed": 50, "colors": ["blue", "off"]},
+    {"name": "White flash", "mode": "jump", "speed": 50, "colors": ["white", "off"]},
+    {"name": "Christmas", "mode": "fade", "speed": 50, "colors": ["red", "green"]},
+    {"name": "Winter", "mode": "fade", "speed": 50, "colors": ["blue", "white"]},
+    {"name": "Halloween", "mode": "fade", "speed": 50, "colors": ["green", "white"]},
+    {"name": "Valentines day", "mode": "fade", "speed": 50, "colors": ["red", "white"]},
 ]
 
 

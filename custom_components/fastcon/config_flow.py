@@ -168,6 +168,7 @@ class FastconOptionsFlow(OptionsFlow):
             step_id="effects",
             menu_options={
                 "effect_new": "+ New effect",
+                "effect_builtin": "+ Add the BRMesh app's built-in effects",
                 **{
                     f"effect_{i}": f"{e['name']} ({e['mode']}, speed {e['speed']}: "
                     f"{', '.join(e['colors'])})"
@@ -175,6 +176,13 @@ class FastconOptionsFlow(OptionsFlow):
                 },
             },
         )
+
+    async def async_step_effect_builtin(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add the app's predefined effects that are missing; keeps your own."""
+        self.config_entry.runtime_data.async_add_builtin_effects()
+        return self.async_create_entry(data=dict(self.config_entry.options))
 
     async def async_step_effect_new(
         self, user_input: dict[str, Any] | None = None

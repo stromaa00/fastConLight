@@ -82,7 +82,7 @@
       },
       "effects": {
         "title": "Effects",
-        "description": "Colour effects offered by every colour light, group and All lights. Pick one to change or delete it, or start a new one."
+        "description": "Colour effects offered by every colour light, group and All lights. Pick one to change or delete it, start a new one, or add the BRMesh app's 21 built-in effects that are missing."
       },
       "effect_edit": {
         "title": "Effect",

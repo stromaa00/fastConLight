@@ -353,9 +353,34 @@ So control type 3 is `[3 | (len + 3) << 4] [type lo] [type hi] [group] [command]
 Full color fade:   88 10 01 42 03 01 05 04 06   fade red, magenta, blue, cyan, green, yellow
 Romantic slow:     48 10 01 43 02               fade magenta, red
 Romantic fast:     48 10 64 43 02               same, speed 100
-(another effect):  58 10 2a 45 01 04            fade cyan, blue, green, speed 42
+Fresh:             58 10 2a 45 01 04            fade cyan, blue, green, speed 42
 ```
-**Layout (decoded with the app's `BLESceneInfo`, z30.b/e/f/g):** a scene is `jiffies` (speed), `mode` (0 or 1) and a list of `RgbStatus` (red/green/blue on or off): `[8 | (2 + n) << 4] [mesh address] [speed 1-100] [mode << 6 | colour 1] [colour 2] … [colour n]`. Colour bits are in the blue-red-green order of the colour command: **bit 0 blue, bit 1 red, bit 2 green** (1 blue, 2 red, 3 magenta, 4 green, 5 cyan, 6 yellow, 7 white, 0 off), confirmed by the user (red/yellow sent with the wrong order showed blue/pink) and by "Full color fade" matching the app's default list red, magenta, blue, cyan, green, yellow exactly. Mode 1 = fade; mode 0 = jump (assumed). A single colour gets "off" added. Implemented: `CommandBuilder.scene()`, debug tool `scene <addr> <speed> <fade|jump> <colours…>` and a colour builder. **Stopping (tested):** a colour or white command (6-byte form) ends the effect and sets that colour; the short on command (`0x80 | level`) doesn't; off switches the light off, and after on the effect continues (the light keeps the effect as its state). Open: confirm mode 0 (jump).
+**Layout (decoded with the app's `BLESceneInfo`, z30.b/e/f/g):** a scene is `jiffies` (speed), `mode` (0 or 1) and a list of `RgbStatus` (red/green/blue on or off): `[8 | (2 + n) << 4] [mesh address] [speed 1-100] [mode << 6 | colour 1] [colour 2] … [colour n]`. Colour bits are in the blue-red-green order of the colour command: **bit 0 blue, bit 1 red, bit 2 green** (1 blue, 2 red, 3 magenta, 4 green, 5 cyan, 6 yellow, 7 white, 0 off), confirmed by the user (red/yellow sent with the wrong order showed blue/pink) and by "Full color fade" matching the app's default list red, magenta, blue, cyan, green, yellow exactly. The app's own `mode` field is inverted: app mode 0 = fade (bit 6 set in the frame), app mode 1 = flash (bit 6 clear). A single colour gets "off" added. Implemented: `CommandBuilder.scene()`, debug tool `scene <addr> <speed> <fade|jump> <colours…>` and a colour builder. **Stopping (tested):** a colour or white command (6-byte form) ends the effect and sets that colour; the short on command (`0x80 | level`) doesn't; off switches the light off, and after on the effect continues (the light keeps the effect as its state). Open: confirm mode 0 (jump).
+
+**The app's 21 predefined effects** (strings `Mod1`–`Mod21`, built in a fragment's `B(int jiffies)` switch; `Mod22`/`Mod23` are "DIY flash/fade 1" from the user's own colours):
+
+| # | Name | Mode | Colours |
+|---|---|---|---|
+| 1 | Full color fade | fade | red, magenta, blue, cyan, green, yellow |
+| 2 | Romantic | fade | magenta, red |
+| 3 | Fresh | fade | cyan, blue, green |
+| 4 | Cozy | fade | yellow, red |
+| 5 | Full color flash | flash | red, magenta, blue, cyan, green, yellow |
+| 6 | Three color flash | flash | red, green, blue |
+| 7 | Yellow and green flash | flash | yellow, green |
+| 8 | Purple and green flash | flash | magenta, green |
+| 9 | Purple and blue flash | flash | magenta, blue |
+| 10 | Yellow and purple flash | flash | yellow, magenta |
+| 11 | Red and green flash | flash | red, green |
+| 12 | Red and blue flash | flash | red, blue |
+| 13 | Green and blue flash | flash | green, blue |
+| 14–17 | Red / Green / Blue / White flash | flash | that colour, off |
+| 18 | Christmas | fade | red, green |
+| 19 | Winter | fade | blue, white |
+| 20 | Halloween | fade | green, white |
+| 21 | Valentines day | fade | red, white |
+
+The speed comes from the app's slider (`jiffies`). These are the integration's default effects; existing meshes get them with Configure → Effects → "Add the BRMesh app's built-in effects".
 
 Other effect-related calls seen (not decoded): `controlDelaySceneWithDevice` with `BLEDelaySceneInfo` (start brightness, step ±1, count, interval: timed fade-in/out), `controlColorChange` and `controlRgbcwModeV2` with lists of full RGB `BLEModeRgbcwBean` (custom colour modes, probably another frame format).
 
