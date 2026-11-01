@@ -18,10 +18,19 @@ static constexpr size_t PAYLOAD_LEN = 24;
 // exactly like the ESP32 firmware and the Home Assistant integration send it.
 static const uint8_t PREFIX[] = {0x02, 0x01, 0x02, 0x1B, 0xFF, 0xF0, 0xFF};
 
-void BrmeshTx::setup() {
-  uint16_t interval = this->interval_ms_ * 1000 / 625;  // 0.625 ms units
+void BrmeshTx::set_interval(uint32_t interval_ms) {
+  if (interval_ms < 20)
+    interval_ms = 20;
+  if (interval_ms > 10240)
+    interval_ms = 10240;
+  this->interval_ms_ = interval_ms;
+  uint16_t interval = interval_ms * 1000 / 625;  // 0.625 ms units
   this->params_.adv_int_min = interval;
   this->params_.adv_int_max = interval;
+}
+
+void BrmeshTx::setup() {
+  this->set_interval(this->interval_ms_);
   this->params_.adv_type = ADV_TYPE_NONCONN_IND;
   this->params_.own_addr_type = BLE_ADDR_TYPE_PUBLIC;
   this->params_.channel_map = ADV_CHNL_ALL;
@@ -66,7 +75,8 @@ void BrmeshTx::send(const std::string &payload_hex, int32_t duration_ms) {
       ESP_LOGE(TAG, "Starting advertising failed: %s", esp_err_to_name(err));
   });
   this->set_timeout("stop", 20 + duration_ms, []() { esp_ble_gap_stop_advertising(); });
-  ESP_LOGD(TAG, "Broadcasting %s for %d ms", payload_hex.c_str(), (int) duration_ms);
+  ESP_LOGD(TAG, "Broadcasting %s for %d ms every %u ms", payload_hex.c_str(), (int) duration_ms,
+           (unsigned) this->interval_ms_);
 }
 
 }  // namespace brmesh_tx

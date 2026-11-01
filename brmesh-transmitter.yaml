@@ -37,6 +37,12 @@ api:
         duration_ms: int
       then:
         - lambda: 'id(brmesh).send(payload, duration_ms);'
+    # Optional: change the time between packets at runtime (debug tool)
+    - action: set_brmesh_interval
+      variables:
+        interval_ms: int
+      then:
+        - lambda: 'id(brmesh).set_interval(interval_ms);'
 
 ota:
   - platform: esphome

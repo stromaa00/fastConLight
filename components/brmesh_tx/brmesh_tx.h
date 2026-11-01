@@ -18,7 +18,9 @@ class BrmeshTx : public Component {
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::AFTER_BLUETOOTH; }
 
-  void set_interval(uint32_t interval_ms) { this->interval_ms_ = interval_ms; }
+  // Time between packets, 20-10240 ms; applies from the next send. Original
+  // ESP32 (Bluetooth 4.x) chips need at least 100 ms.
+  void set_interval(uint32_t interval_ms);
 
   // payload_hex: the 24 bytes after the 0xFFF0 company ID, as hex (48 chars)
   void send(const std::string &payload_hex, int32_t duration_ms);
