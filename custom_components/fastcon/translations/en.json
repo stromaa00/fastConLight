@@ -62,10 +62,7 @@
       },
       "groups": {
         "title": "Groups",
-        "description": "Pick a group to change or delete, or + for a new one.",
-        "data": {
-          "group": "Group"
-        }
+        "description": "Each group is its own device under this mesh, with its lights under it. Pick a group to change or delete it, or start a new one."
       },
       "group_edit": {
         "title": "Group",
@@ -79,7 +76,7 @@
         },
         "data_description": {
           "group_id": "1-255. Use the id of a group made in the BRMesh app to take it over (Flur is usually 1).",
-          "area": "Puts the group's light entity into this area, so controlling the area switches the whole group with one command per light type. Keep the group's lights themselves out of this area, or the area also switches them one by one."
+          "area": "Puts the group's device into this area, so controlling the area switches the whole group with one command per light type. Keep the group's lights themselves out of this area, or the area also switches them one by one."
         }
       }
     },
@@ -127,13 +124,6 @@
     "sensor": {
       "bound_mesh_address": {
         "name": "Bound mesh address"
-      }
-    }
-  },
-  "selector": {
-    "group_choice": {
-      "options": {
-        "new": "+ New group"
       }
     }
   }

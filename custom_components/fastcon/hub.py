@@ -15,6 +15,7 @@ from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -42,6 +43,7 @@ from .const import (
     MISSED_HEARTBEATS,
     SCAN_ADOPT_WINDOW,
     UNAVAILABLE_AFTER,
+    group_device_id,
     signal_availability,
     signal_device_updated,
     signal_groups_changed,
@@ -167,9 +169,6 @@ class FastconHub:
         self.auto_bind = False
         # Group id -> name; members are the devices whose group is that id
         self.groups: dict[int, str] = {}
-        # Area chosen for a new group whose entity doesn't exist yet; the
-        # entity applies it when added. Afterwards the entity registry holds it.
-        self.pending_group_areas: dict[int, str | None] = {}
         # Monotonic time of this mesh's last scan, to adopt the lights it finds
         self.last_scan: float | None = None
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
@@ -646,6 +645,7 @@ class FastconHub:
             elif device.did not in dids and device.group == group_id:
                 self._async_assign_group(device, 0)
         self._async_save()
+        self.async_sync_group_devices()
         async_dispatcher_send(self.hass, signal_groups_changed(self.entry.entry_id))
 
     @callback
@@ -655,7 +655,45 @@ class FastconHub:
             self._async_assign_group(device, 0)
         self.groups.pop(group_id, None)
         self._async_save()
+        self.async_sync_group_devices()
         async_dispatcher_send(self.hass, signal_groups_changed(self.entry.entry_id))
+
+    @callback
+    def async_sync_group_devices(self) -> None:
+        """Give each group its own device under the hub, and hang lights under it.
+
+        So the hub's connected devices list the groups and the lights in no
+        group, and each group device lists its lights.
+        """
+        registry = dr.async_get(self.hass)
+        entry_id = self.entry.entry_id
+        hub_device = registry.async_get_device(identifiers={(DOMAIN, entry_id)})
+        group_devices = {}
+        for group_id, name in self.groups.items():
+            device = registry.async_get_or_create(
+                config_entry_id=entry_id,
+                identifiers={(DOMAIN, group_device_id(entry_id, group_id))},
+                name=name,
+                manufacturer="BRMesh",
+                model="Light group",
+                via_device=(DOMAIN, entry_id),
+            )
+            if device.name != name:
+                device = registry.async_update_device(device.id, name=name) or device
+            group_devices[group_id] = device
+        for light in self.devices.values():
+            device = registry.async_get_device(identifiers={(DOMAIN, light.did)})
+            parent = group_devices.get(light.group, hub_device)
+            if device and parent and device.via_device_id != parent.id:
+                registry.async_update_device(device.id, via_device_id=parent.id)
+        wanted = {group_device_id(entry_id, gid) for gid in self.groups}
+        prefix = group_device_id(entry_id, 0)[:-1]
+        for device in dr.async_entries_for_config_entry(registry, entry_id):
+            if any(
+                domain == DOMAIN and ident.startswith(prefix) and ident not in wanted
+                for domain, ident in device.identifiers
+            ):
+                registry.async_remove_device(device.id)
 
     @callback
     def _async_assign_group(self, device: FastconDevice, group_id: int) -> None:

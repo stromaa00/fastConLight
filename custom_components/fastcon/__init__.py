@@ -35,6 +35,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: FastconConfigEntry) -> b
         manufacturer="fastConLight",
         model="BRMesh gateway (BlueZ)",
     )
+    # Group devices next, so lights in a group can point at theirs.
+    hub.async_sync_group_devices()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))

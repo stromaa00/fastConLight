@@ -43,17 +43,16 @@ from .const import (
     DEFAULT_RELAY_SCAN,
     DEVICE_ADDRESS_PREFIX,
     DOMAIN,
+    group_device_id,
     TRANSMITTER_ACTION_SUFFIX,
 )
 from .hub import FastconDevice
 from .protocol import is_light
 
-CONF_GROUP = "group"
 CONF_GROUP_ID = "group_id"
 CONF_LIGHTS = "lights"
 CONF_DELETE = "delete"
 CONF_AREA = "area"
-NEW_GROUP = "new"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -158,32 +157,43 @@ class FastconOptionsFlow(OptionsFlow):
     async def async_step_groups(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Pick a group to change, or start a new one."""
+        """Menu: a new group, or one entry per group to change it."""
         if self.config_entry.state is not ConfigEntryState.LOADED:
             return self.async_abort(reason="not_loaded")
         hub = self.config_entry.runtime_data
-        if user_input is not None or not hub.groups:
-            choice = (user_input or {}).get(CONF_GROUP, NEW_GROUP)
-            self._group_id = None if choice == NEW_GROUP else int(choice)
-            return await self.async_step_group_edit()
-        options = [selector.SelectOptionDict(value=NEW_GROUP, label="+")] + [
-            selector.SelectOptionDict(value=str(gid), label=f"{name} ({gid})")
-            for gid, name in sorted(hub.groups.items())
-        ]
-        return self.async_show_form(
+        if not hub.groups:
+            return await self.async_step_group_new()
+        return self.async_show_menu(
             step_id="groups",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_GROUP, default=NEW_GROUP): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=options,
-                            mode=selector.SelectSelectorMode.LIST,
-                            translation_key="group_choice",
-                        )
-                    )
-                }
-            ),
+            menu_options={
+                "group_new": "+ New group",
+                **{
+                    f"group_{gid}": f"{name} (id {gid}, "
+                    f"{len(hub.group_members(gid))} lights)"
+                    for gid, name in sorted(hub.groups.items())
+                },
+            },
         )
+
+    async def async_step_group_new(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Start a new group."""
+        self._group_id = None
+        return await self.async_step_group_edit()
+
+    def __getattr__(self, name: str) -> Any:
+        """Menu entries group_<id> open that group's form."""
+        prefix = "async_step_group_"
+        if name.startswith(prefix) and name[len(prefix) :].isdigit():
+            group_id = int(name[len(prefix) :])
+
+            async def _step(user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+                self._group_id = group_id
+                return await self.async_step_group_edit()
+
+            return _step
+        raise AttributeError(name)
 
     async def async_step_group_edit(
         self, user_input: dict[str, Any] | None = None
@@ -239,8 +249,12 @@ class FastconOptionsFlow(OptionsFlow):
             ): str,
         }
         if group_id is None:
-            schema[vol.Required(CONF_GROUP_ID, default=hub.next_free_group())] = vol.All(
-                vol.Coerce(int), vol.Range(min=1, max=255)
+            schema[vol.Required(CONF_GROUP_ID, default=hub.next_free_group())] = (
+                selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1, max=255, step=1, mode=selector.NumberSelectorMode.BOX
+                    )
+                )
             )
         schema[
             vol.Optional(
@@ -271,24 +285,32 @@ class FastconOptionsFlow(OptionsFlow):
             description_placeholders=placeholders,
         )
 
-    def _group_entity_id(self, group_id: int) -> str | None:
-        return er.async_get(self.hass).async_get_entity_id(
-            "light", DOMAIN, f"{self.config_entry.entry_id}_group_{group_id}"
+    def _group_device(self, group_id: int) -> dr.DeviceEntry | None:
+        return dr.async_get(self.hass).async_get_device(
+            identifiers={(DOMAIN, group_device_id(self.config_entry.entry_id, group_id))}
         )
 
+    def _group_entity(self, group_id: int) -> er.RegistryEntry | None:
+        entities = er.async_get(self.hass)
+        entity_id = entities.async_get_entity_id(
+            "light", DOMAIN, f"{self.config_entry.entry_id}_group_{group_id}"
+        )
+        return entities.async_get(entity_id) if entity_id else None
+
     def _group_area(self, group_id: int) -> str | None:
-        """The group entity's area as set in Home Assistant."""
-        if (entity_id := self._group_entity_id(group_id)) is None:
-            return None
-        entry = er.async_get(self.hass).async_get(entity_id)
-        return entry.area_id if entry else None
+        """The group's area: its light's own area if set, else its device's."""
+        entity = self._group_entity(group_id)
+        if entity and entity.area_id:
+            return entity.area_id
+        device = self._group_device(group_id)
+        return device.area_id if device else None
 
     def _async_set_group_area(self, group_id: int, area: str | None) -> None:
-        """Put the group entity into an area (now, or once it is created)."""
-        if (entity_id := self._group_entity_id(group_id)) is not None:
-            er.async_get(self.hass).async_update_entity(entity_id, area_id=area)
-        elif area:
-            self.config_entry.runtime_data.pending_group_areas[group_id] = area
+        """Put the group's device into an area; its light follows the device."""
+        if (device := self._group_device(group_id)) is not None:
+            dr.async_get(self.hass).async_update_device(device.id, area_id=area)
+        if (entity := self._group_entity(group_id)) is not None and entity.area_id:
+            er.async_get(self.hass).async_update_entity(entity.entity_id, area_id=None)
 
     def _lights_in_area(self, area: str | None, dids: list[str]) -> list[str]:
         """Selected lights that are in the area themselves (entity or device)."""

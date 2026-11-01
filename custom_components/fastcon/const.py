@@ -54,6 +54,11 @@ def signal_availability(entry_id: str) -> str:
     return f"{DOMAIN}_availability_{entry_id}"
 
 
+def group_device_id(entry_id: str, group_id: int) -> str:
+    """Device registry identifier of a group (its own device under the hub)."""
+    return f"{entry_id}_group_{group_id}"
+
+
 def signal_groups_changed(entry_id: str) -> str:
     """Dispatcher signal sent when groups are added, renamed or deleted."""
     return f"{DOMAIN}_groups_changed_{entry_id}"
