@@ -1,4 +1,4 @@
-"""Per-light mesh address, shown and editable on the device page."""
+"""Per-light mesh address for the next bind, editable on the device page."""
 
 from __future__ import annotations
 
@@ -39,7 +39,11 @@ async def async_setup_entry(
 
 
 class FastconMeshAddress(NumberEntity):
-    """The light's mesh address; changing it binds the light to the new address."""
+    """Mesh address the light gets at its next bind.
+
+    Changing it sends nothing; the Bind button applies it. The address in use
+    is shown read-only by the bound mesh address sensor.
+    """
 
     _attr_has_entity_name = True
     _attr_translation_key = "mesh_address"
@@ -58,7 +62,9 @@ class FastconMeshAddress(NumberEntity):
 
     @property
     def native_value(self) -> int:
-        """Current mesh address."""
+        """The chosen new address, or the current one if none is chosen."""
+        if self._device.new_address is not None:
+            return self._device.new_address
         return self._device.mesh_address
 
     async def async_added_to_hass(self) -> None:
@@ -72,6 +78,6 @@ class FastconMeshAddress(NumberEntity):
         )
 
     async def async_set_native_value(self, value: float) -> None:
-        """Store the new address and bind the light to it."""
-        self._hub.async_set_mesh_address(self._device, int(value))
+        """Remember the address for the next bind."""
+        self._hub.async_set_new_address(self._device, int(value))
         self.async_write_ha_state()

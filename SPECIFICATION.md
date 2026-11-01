@@ -346,9 +346,10 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 | Entity | Purpose |
 |--------|---------|
 | `button.<hub>_scan_for_devices` | Broadcasts the scan command |
-| `button.<hub>_bind_all_devices` | Sends a bind (discovery response) to every known device |
-| `number.brmesh_<name>_mesh_address` | The light's mesh address (1-255). Changing it binds the light to the new address; addresses used by another light are refused |
-| `button.brmesh_<name>_bind` | Binds just this light |
+| `button.<hub>_bind_all_devices` | Presses every light's Bind button: binds each to its new mesh address if one is chosen, otherwise to its current one |
+| `number.brmesh_<name>_mesh_address` | Mesh address (1-255) for the light's next bind. Changing it sends nothing; Bind applies it. Several lights may share an address and then follow the same commands; their heartbeats can't be told apart, so they also share availability |
+| `button.brmesh_<name>_bind` | Binds just this light, to the chosen new mesh address if any (saved as pending until pressed) |
+| `sensor.brmesh_<name>_bound_mesh_address` | Read-only: the mesh address commands go to. Changes only through Mesh address + Bind (or auto-bind of a new light); attribute `pending_address` shows a chosen but unapplied address |
 | `switch.<hub>_auto_bind_discovered_lights` | When on, lights found by a scan are bound automatically (off by default, saved) |
 | `light.brmesh_<name>` | One per light; assumed state, restored after restart |
 

@@ -97,6 +97,11 @@
       "all_lights": {
         "name": "All lights"
       }
+    },
+    "sensor": {
+      "bound_mesh_address": {
+        "name": "Bound mesh address"
+      }
     }
   }
 }

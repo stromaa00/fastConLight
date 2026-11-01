@@ -86,6 +86,8 @@ class FastconDevice:
     device_type: int
     key: str  # 8 hex chars
     mesh_address: int
+    # Address chosen for the next bind; the light keeps mesh_address until then
+    new_address: int | None = None
 
     @property
     def name(self) -> str:
@@ -377,10 +379,10 @@ class FastconHub:
         info = describe_broadcast(payload, self.phone_key)
         beat = parse_heartbeat(payload, self.phone_key)
         mesh = beat.mesh_address if beat else info.get("mesh_address")
-        device = next(
-            (d for d in self.devices.values() if mesh is not None and d.mesh_address == mesh),
-            None,
-        )
+        # Several lights may share a mesh address
+        lights = [
+            d.name for d in self.devices.values() if mesh is not None and d.mesh_address == mesh
+        ]
         own = info["kind"] == "control" and info.get("sequence") in self._sent_sequences
         # Lights always send from 11:22:..., so our exact packet from any other
         # address is one of our own senders heard by another, not a light.
@@ -401,7 +403,7 @@ class FastconHub:
             "rssi": service_info.rssi,
             **info,
             "mesh_address": mesh,
-            "light": device.name if device else None,
+            "light": ", ".join(lights) or None,
             "own_command": own,
             "raw": payload.hex(),
         }
@@ -418,11 +420,9 @@ class FastconHub:
 
     @callback
     def _async_on_heartbeat(self, address: str, beat: Heartbeat) -> None:
-        device = next(
-            (d for d in self.devices.values() if d.mesh_address == beat.mesh_address),
-            None,
-        )
-        if device is None:
+        # Heartbeats carry no DID, so lights sharing a mesh address all count it
+        devices = [d for d in self.devices.values() if d.mesh_address == beat.mesh_address]
+        if not devices:
             if stale := next(
                 (
                     d
@@ -442,24 +442,28 @@ class FastconHub:
                     address, beat.mesh_address,
                 )
             return
-        self._previous_address.pop(device.did, None)
-        self._pending_bind.discard(device.did)
         now = time.monotonic()
-        if (last := self._last_heartbeat.get(device.did)) is not None and (
-            now - last >= HEARTBEAT_BURST_GAP
-        ):
-            self._heartbeat_intervals.setdefault(device.did, deque(maxlen=20)).append(
-                now - last
-            )
-            _LOGGER.debug(
-                "Heartbeat from %s (mesh %d) via %s, %.0f s after the previous one",
-                device.name, beat.mesh_address, address, now - last,
-            )
-        self._last_heartbeat[device.did] = now
-        self._last_heartbeat_time[device.did] = dt_util.utcnow().isoformat()
-        if device.did in self._unavailable:
-            self._unavailable.discard(device.did)
-            _LOGGER.info("BRMesh %s is reachable again", device.name)
+        changed = False
+        for device in devices:
+            self._previous_address.pop(device.did, None)
+            self._pending_bind.discard(device.did)
+            if (last := self._last_heartbeat.get(device.did)) is not None and (
+                now - last >= HEARTBEAT_BURST_GAP
+            ):
+                self._heartbeat_intervals.setdefault(device.did, deque(maxlen=20)).append(
+                    now - last
+                )
+                _LOGGER.debug(
+                    "Heartbeat from %s (mesh %d) via %s, %.0f s after the previous one",
+                    device.name, beat.mesh_address, address, now - last,
+                )
+            self._last_heartbeat[device.did] = now
+            self._last_heartbeat_time[device.did] = dt_util.utcnow().isoformat()
+            if device.did in self._unavailable:
+                self._unavailable.discard(device.did)
+                _LOGGER.info("BRMesh %s is reachable again", device.name)
+                changed = True
+        if changed:
             self._async_availability_changed()
 
     @callback
@@ -617,36 +621,40 @@ class FastconHub:
         )
 
     @callback
-    def async_set_mesh_address(self, device: FastconDevice, address: int) -> None:
-        """Give a device a new mesh address and bind it so the light adopts it."""
+    def async_set_new_address(self, device: FastconDevice, address: int) -> None:
+        """Choose the mesh address the light gets when its Bind button is pressed.
+
+        Nothing is sent yet. Several lights may share an address; they then
+        all follow commands to it.
+        """
         if not 1 <= address <= 255:
             raise ServiceValidationError(f"Mesh address {address} is not between 1 and 255")
-        if other := next(
-            (
-                d
-                for d in self.devices.values()
-                if d.mesh_address == address and d.did != device.did
-            ),
-            None,
-        ):
-            raise ServiceValidationError(
-                f"Mesh address {address} is already used by BRMesh {other.name}"
-            )
-        if address != device.mesh_address:
+        new_address = None if address == device.mesh_address else address
+        if new_address != device.new_address:
+            device.new_address = new_address
+            self._async_save()
+            async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
+
+    @callback
+    def async_bind_new_address(self, device: FastconDevice) -> None:
+        """Bind the light, moving it to its new mesh address if one was chosen."""
+        if device.new_address is not None:
             _LOGGER.info(
-                "BRMesh %s: mesh address %d -> %d", device.name, device.mesh_address, address
+                "BRMesh %s: mesh address %d -> %d",
+                device.name, device.mesh_address, device.new_address,
             )
             self._previous_address[device.did] = device.mesh_address
-            device.mesh_address = address
+            device.mesh_address = device.new_address
+            device.new_address = None
             self._async_save()
             async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
         self.async_bind(device)
 
     @callback
     def async_bind_all(self) -> None:
-        """Bind every known device."""
+        """Bind every known device, to its new mesh address where one was chosen."""
         for device in self.devices.values():
-            self.async_bind(device)
+            self.async_bind_new_address(device)
 
     @callback
     def async_send_light(self, device: FastconDevice, command: bytes) -> None:

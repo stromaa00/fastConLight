@@ -85,7 +85,7 @@ class FastconButton(ButtonEntity):
 
 
 class FastconBindButton(ButtonEntity):
-    """Bind just this light (send it its mesh address and the phone key)."""
+    """Bind just this light: send it its (new) mesh address and the phone key."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "bind"
@@ -100,4 +100,4 @@ class FastconBindButton(ButtonEntity):
 
     async def async_press(self) -> None:
         """Bind the light."""
-        self._hub.async_bind(self._device)
+        self._hub.async_bind_new_address(self._device)
