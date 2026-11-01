@@ -507,6 +507,9 @@ class FastconHub:
             device.bind_sent = False
             self._pending_bind.discard(device.did)
             changed = True
+            # The light is bound now; make sure it has its group again
+            if device.group in self.groups:
+                self._async_assign_group(device, device.group)
         if changed:
             self._async_save()
             async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
@@ -702,6 +705,8 @@ class FastconHub:
 
         A light is in at most one group, so adding it here moves it out of
         any other group; lights no longer selected leave the group (group 0).
+        Selected lights get their membership sent again even if Home Assistant
+        already has them in the group, e.g. after a bind made them forget it.
         """
         if not 1 <= group_id <= 255:
             raise ServiceValidationError(f"Group id {group_id} is not between 1 and 255")
@@ -709,7 +714,7 @@ class FastconHub:
         for device in self.devices.values():
             if not is_light(device.device_type):
                 continue
-            if device.did in dids and device.group != group_id:
+            if device.did in dids:
                 self._async_assign_group(device, group_id)
             elif device.did not in dids and device.group == group_id:
                 self._async_assign_group(device, 0)
@@ -774,7 +779,8 @@ class FastconHub:
         device.group = group_id
         self._queue(
             f"group:{device.did}",
-            lambda: self._builder.assign_group(device.mesh_address, self.phone_key, device.group),
+            # bind_address: right after a bind to a new address the light is there
+            lambda: self._builder.assign_group(device.bind_address, self.phone_key, device.group),
             lambda: (
                 f"put into group {device.group}" if device.group else "remove from its group"
             ),
@@ -838,6 +844,9 @@ class FastconHub:
             lambda: f"bind to mesh address {device.bind_address}",
             device,
         )
+        # A bind clears the light's group, so send its group again after it
+        if device.group in self.groups:
+            self._async_assign_group(device, device.group)
 
     @callback
     def async_set_new_address(self, device: FastconDevice, address: int) -> None:
