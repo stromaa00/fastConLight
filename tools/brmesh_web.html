@@ -55,6 +55,12 @@
   .filters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
   #cmdline { font-family: ui-monospace, Consolas, monospace; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .fx-colors, .fx-palette { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; min-height: 30px; }
+  .fx-chip { width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer; position: relative; }
+  .fx-chip.small { width: 24px; height: 24px; }
+  .fx-colors .fx-chip::after { content: "×"; position: absolute; right: 1px; top: -3px; font-size: 11px; color: #000; opacity: .6; }
+  .fx-palette { margin-top: 8px; }
+  #fx-preview { font: 12px ui-monospace, Consolas, monospace; color: var(--muted); margin-top: 8px; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -123,6 +129,43 @@
         <button data-needs-conn class="fixed" id="send-raw">Send</button>
       </div>
       <div class="hint">Power cycle a light to put it in discovery mode, then scan.</div>
+    </section>
+
+    <section>
+      <h2>Effect builder</h2>
+      <div class="grid2">
+        <div><label>Mesh address</label><input type="number" id="fx-address" min="1" max="255" value="16"></div>
+        <div><label>Preset</label>
+          <select id="fx-preset">
+            <option value="">Custom</option>
+            <option value="1:red,magenta,blue,cyan,green,yellow">Full color fade</option>
+            <option value="0:red,magenta,blue,cyan,green,yellow">Full color jump</option>
+            <option value="1:magenta,red">Romantic</option>
+            <option value="1:red,yellow">Fire (red, yellow)</option>
+            <option value="1:blue,cyan,green">Ocean (blue, cyan, green)</option>
+            <option value="0:red,off">Red flash</option>
+            <option value="0:white,off">White flash</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid2">
+        <div><label>Mode</label>
+          <select id="fx-mode"><option value="fade">Fade</option><option value="jump">Jump</option></select>
+        </div>
+        <div><label>Speed <span id="fx-speed-val">50</span> (1 slow … 100 fast)</label>
+          <input type="range" id="fx-speed" min="1" max="100" value="50"></div>
+      </div>
+      <label>Colours (in order, up to 9)</label>
+      <div class="fx-colors" id="fx-colors"></div>
+      <div class="fx-palette" id="fx-palette"></div>
+      <div id="fx-preview"></div>
+      <div class="row" style="margin-top:8px">
+        <button data-needs-conn class="primary" id="fx-send">Start effect</button>
+        <button data-needs-conn id="fx-stop" title="Ends the effect with a colour command: the colour and brightness from Light control">Stop (colour)</button>
+        <button data-needs-conn id="fx-white" title="Ends the effect with a white command">Stop (white)</button>
+        <button data-needs-conn id="fx-off">Off</button>
+      </div>
+      <label class="check" style="margin-top:6px"><input type="checkbox" id="fx-live"> send on every change</label>
     </section>
 
     <section>
@@ -416,7 +459,82 @@ document.addEventListener("change", (e) => {
 });
 document.addEventListener("input", saveSettings);
 
+// --- Effect builder: control type 8 = speed, mode << 6 | colour 1, colours (3-bit RGB)
+const FX_COLORS = { red: "#ff3030", green: "#30d030", yellow: "#ffe030", blue: "#3060ff",
+  magenta: "#ff30ff", cyan: "#30e0ff", white: "#ffffff", off: "#222" };
+let fxColors = ["magenta", "red"];
+function fxLine() {
+  return `scene ${$("fx-address").value || 0} ${$("fx-speed").value} ${$("fx-mode").value} ${fxColors.join(" ")}`;
+}
+function fxRender() {
+  $("fx-colors").innerHTML = fxColors.map((c, i) =>
+    `<div class="fx-chip" data-fx-del="${i}" title="${c} – click to remove" style="background:${FX_COLORS[c]}"></div>`).join("")
+    || `<span class="hint">click colours below to add</span>`;
+  $("fx-palette").innerHTML = Object.entries(FX_COLORS).map(([name, css]) =>
+    `<div class="fx-chip small" data-fx-add="${name}" title="add ${name}" style="background:${css}"></div>`).join("");
+  $("fx-preview").textContent = fxLine();
+}
+function fxChanged() {
+  fxRender();
+  saveFx();
+  if ($("fx-live").checked && state.connected && fxColors.length) {
+    clearTimeout(fxChanged.t);
+    fxChanged.t = setTimeout(() => run(fxLine()), 250);
+  }
+}
+function saveFx() {
+  localStorage.setItem("brmesh-debug-fx2", JSON.stringify({
+    address: $("fx-address").value, speed: $("fx-speed").value, mode: $("fx-mode").value,
+    colors: fxColors, preset: $("fx-preset").value, live: $("fx-live").checked,
+  }));
+}
+function loadFx() {
+  let s; try { s = JSON.parse(localStorage.getItem("brmesh-debug-fx2")); } catch { s = null; }
+  if (!s) return;
+  $("fx-address").value = s.address ?? 16;
+  $("fx-speed").value = s.speed ?? 50;
+  $("fx-mode").value = s.mode ?? "fade";
+  if (Array.isArray(s.colors)) fxColors = s.colors.filter((c) => c in FX_COLORS);
+  $("fx-preset").value = s.preset ?? "";
+  $("fx-live").checked = !!s.live;
+}
+$("fx-preset").onchange = () => {
+  const v = $("fx-preset").value;
+  if (v) {
+    const [mode, colors] = v.split(":");
+    $("fx-mode").value = mode === "1" ? "fade" : "jump";
+    fxColors = colors.split(",");
+  }
+  fxChanged();
+};
+$("fx-speed").oninput = () => { $("fx-speed-val").textContent = $("fx-speed").value; fxChanged(); };
+$("fx-address").oninput = fxChanged;
+$("fx-mode").onchange = () => { $("fx-preset").value = ""; fxChanged(); };
+$("fx-send").onclick = () => fxColors.length ? run(fxLine()) : addLog("error", "Add at least one colour.");
+$("fx-stop").onclick = () => {
+  const hex = $("color").value;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  run(`rgb ${$("fx-address").value} ${r} ${g} ${b} ${percent()}`);
+};
+$("fx-white").onclick = () => run(`white ${$("fx-address").value} ${percent()}`);
+$("fx-off").onclick = () => run(`off ${$("fx-address").value}`);
+$("fx-live").onchange = saveFx;
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  if (t.dataset.fxAdd !== undefined) {
+    if (fxColors.length >= 9) return addLog("error", "At most 9 colours.");
+    fxColors.push(t.dataset.fxAdd);
+  } else if (t.dataset.fxDel !== undefined) {
+    fxColors.splice(+t.dataset.fxDel, 1);
+  } else return;
+  $("fx-preset").value = "";
+  fxChanged();
+});
+
 (async () => {
+  loadFx();
+  $("fx-speed-val").textContent = $("fx-speed").value;
+  fxRender();
   const saved = loadSettings();
   const d = await api("/api/defaults");
   // Saved values win over the BRMESH_* environment defaults

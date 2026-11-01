@@ -121,18 +121,28 @@ def _decode_new_protocol(payload: bytes, phone_key: bytes) -> str:
     return "\n".join(lines)
 
 
+# Phone keys of other meshes found so far, to decode their frames that have
+# no zero padding (e.g. effects, which use all 12 data bytes)
+_known_keys: list[bytes] = []
+
+
 def _guess_phone_key(payload: bytes) -> bytes | None:
-    """The phone key of a frame from another mesh, read from its zero padding.
+    """The phone key of a frame from another mesh.
 
     Data bytes 8-11 are usually zero, so there the encrypted bytes are the key
-    itself. Accepted only if header byte 2 (last key byte) and the checksum agree.
+    itself; otherwise keys found in earlier frames are tried. Accepted only if
+    header byte 2 (last key byte) and the checksum agree.
     """
     body = protocol.unwrap_rf_frame(payload) or payload
     if len(body) < 16:
         return None
-    candidate = bytes(body[12:16])
-    header, data, ok = _xor_frame(body, candidate)
-    return candidate if ok and header[2] == candidate[3] else None
+    for candidate in [bytes(body[12:16]), *_known_keys]:
+        header, _, ok = _xor_frame(body, candidate)
+        if ok and header[2] == candidate[3]:
+            if candidate not in _known_keys:
+                _known_keys.append(candidate)
+            return candidate
+    return None
 
 
 def _decode_brmesh(payload: bytes, phone_key: bytes) -> str:
@@ -144,7 +154,8 @@ def _decode_brmesh(payload: bytes, phone_key: bytes) -> str:
         if (guess := _guess_phone_key(payload)) is not None and guess != phone_key:
             return (
                 f"           ! other mesh: phone key is probably {guess.hex().upper()} "
-                f"(read from the zero padding, checksum ok)\n" + _decode_brmesh(payload, guess)
+                f"(from zero padding or an earlier frame, checksum ok)\n"
+                + _decode_brmesh(payload, guess)
             )
     beat = protocol.parse_heartbeat(payload, phone_key)
     mesh = beat.mesh_address if beat else info.get("mesh_address")
@@ -284,6 +295,10 @@ class Debugger:
             f"{target} {protocol.device_type_name(device_type)} lights: "
             f"{protocol.describe_command(command)}",
         )
+
+    async def effect(self, address: int, speed: int, code: bytes) -> None:
+        payload = self.builder.effect(address, self.phone_key, speed, code)
+        await self.send(payload, f"effect {code.hex(' ')} at speed {speed} on mesh address {address}")
 
     async def assign_group(self, address: int, group: int) -> None:
         payload = self.builder.assign_group(address, self.phone_key, group)
@@ -479,6 +494,10 @@ SHELL_HELP = """\
   group add <id> <address> [...]     put lights into a group (a light is in at most one)
   group remove <address> [...]       take lights out of their group (= group 0)
   <light command> group:<id> ...     switch a group, e.g. off group:1, brightness group:1 30
+  scene <address> <speed> <fade|jump> <colours...>
+                                     colour effect, e.g. scene 16 50 fade magenta red blue
+                                     (colours: red green blue yellow magenta cyan white off)
+  effect <address> <speed> <hex>     raw control type 8 bytes after the speed
   cmd <address|all> <hex>            send any command bytes as a control command, e.g. cmd all 80
   raw <hex>                          send a 24-byte payload as is
   duration <ms>                      advertising time per command
@@ -544,6 +563,19 @@ async def run_line(dbg: Debugger, line: str) -> bool:
                 await dbg.assign_group(int(address), 0)
         else:
             raise ValueError("group add <group id> <mesh address> [...] | group remove <mesh address> [...]")
+    elif cmd == "scene":
+        # scene <address> <speed> <fade|jump> <colour> [...], e.g. scene 16 50 fade magenta red blue
+        mode = {"jump": protocol.EFFECT_MODE_JUMP, "fade": protocol.EFFECT_MODE_FADE}[rest[2].lower()]
+        colors = [protocol.EFFECT_COLORS[name.lower()] for name in rest[3:]]
+        payload = dbg.builder.scene(int(rest[0]), dbg.phone_key, int(rest[1]), mode, colors)
+        info = protocol.describe_broadcast(payload, dbg.phone_key)
+        await dbg.send(payload, protocol.describe_action(info))
+    elif cmd == "effect":
+        # effect <address> <speed 1-100> <code hex...>, e.g. effect 16 50 43 02
+        code = bytes.fromhex("".join(rest[2:]))
+        if not 1 <= len(code) <= 9:
+            raise ValueError("effect <address> <speed 1-100> <1-9 code bytes>")
+        await dbg.effect(int(rest[0]), int(rest[1]), code)
     elif cmd == "cmd":
         command = bytes.fromhex("".join(rest[1:]))
         if not 1 <= len(command) <= 10:
