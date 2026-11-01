@@ -162,13 +162,13 @@ def _decode_brmesh(payload: bytes, phone_key: bytes) -> str:
     if beat:
         lines.append(f"           heartbeat: mesh address {beat.mesh_address}, group {beat.group_address}")
     if info.get("kind") == "control" and info.get("checksum_ok") and info.get("control_type") == 3:
-        # Seen from the BRMesh app for "all on": 43 2a a8 00 80 = type 3, device
-        # type A82A (RGBCW), then 00 80. Meaning of the last bytes is a guess.
-        data = bytes.fromhex(info["data"])
-        device_type = data[1] | (data[2] << 8)
+        # By device type in a group, as the app switches all (group 0) and groups
+        device_type = info["target_device_type"]
+        group = info.get("group", 0)
         lines.append(
-            f"           control type 3 (by device type?): {protocol.device_type_name(device_type)} "
-            f"(0x{device_type:04X}), then {data[3:1 + (data[0] >> 4)].hex(' ')}"
+            f"           control type 3: {protocol.device_type_name(device_type)} "
+            f"(0x{device_type:04X}) in group {group}{' (all)' if not group else ''}, "
+            f"command {info.get('command')}"
         )
     elif info.get("kind") == "control" and info.get("checksum_ok") and "mesh_address" in info:
         target = info["mesh_address"]
@@ -276,13 +276,18 @@ class Debugger:
         await self.send(payload, f"bind {did[-4:].upper()} to mesh address {address}")
         self.pending_binds[did.upper()] = address
 
-    async def light_by_type(self, device_type: int, command: bytes) -> None:
-        payload = self.builder.light_by_type(device_type, self.phone_key, command)
+    async def light_by_type(self, device_type: int, command: bytes, group: int = 0) -> None:
+        payload = self.builder.light_by_type(device_type, self.phone_key, command, group)
+        target = "all" if not group else f"group {group}"
         await self.send(
             payload,
-            f"all {protocol.device_type_name(device_type)} lights: "
+            f"{target} {protocol.device_type_name(device_type)} lights: "
             f"{protocol.describe_command(command)}",
         )
+
+    async def assign_group(self, address: int, group: int) -> None:
+        payload = self.builder.assign_group(address, self.phone_key, group)
+        await self.send(payload, f"put mesh address {address} into group {group}")
 
     async def light(self, address: int, command: bytes) -> None:
         payload = self.builder.light(address, self.phone_key, command)
@@ -471,6 +476,9 @@ SHELL_HELP = """\
   brightness <address|all> <percent>  brightness only (no on bit, min 5); "on <addr> <percent>" = on + brightness
   rgb <address|all> <r> <g> <b> [percent]
   white <address|all> [percent]
+  group add <id> <address> [...]     put lights into a group (a light is in at most one)
+  group remove <address> [...]       take lights out of their group (= group 0)
+  <light command> group:<id> ...     switch a group, e.g. off group:1, brightness group:1 30
   cmd <address|all> <hex>            send any command bytes as a control command, e.g. cmd all 80
   raw <hex>                          send a 24-byte payload as is
   duration <ms>                      advertising time per command
@@ -510,18 +518,32 @@ async def run_line(dbg: Debugger, line: str) -> bool:
             await dbg.bind(*_parse_bind(rest))
     elif cmd in ("on", "off", "brightness", "rgb", "white"):
         command = _light_command(cmd, rest[1:])
-        if rest[0].lower() == "types":
-            # Every light type: those seen in discovery, else all known light types
+        target = rest[0].lower()
+        if target == "types" or target.startswith("group:"):
+            # Every light type (those seen in discovery, else all known light
+            # types), optionally only in one group: group:<id>
+            group = int(target[6:]) if target.startswith("group:") else 0
             types = sorted(
                 {f.device_type for f in dbg.discovered.values() if protocol.is_light(f.device_type)}
             ) or sorted(protocol.LIGHT_TYPE_NAMES)
             for device_type in types:
-                await dbg.light_by_type(device_type, command)
+                await dbg.light_by_type(device_type, command, group)
         elif rest[0].lower().startswith("type:"):
             # type:<hex> = every light of that device type, like the app's all on/off
             await dbg.light_by_type(int(rest[0][5:], 16), command)
         else:
             await dbg.light(_address(rest[0]), command)
+    elif cmd == "group":
+        # group add <id> <address> [...] / group remove <address> [...] (= group 0)
+        action = rest[0].lower() if rest else ""
+        if action == "add" and len(rest) >= 3:
+            for address in rest[2:]:
+                await dbg.assign_group(int(address), int(rest[1]))
+        elif action == "remove" and len(rest) >= 2:
+            for address in rest[1:]:
+                await dbg.assign_group(int(address), 0)
+        else:
+            raise ValueError("group add <group id> <mesh address> [...] | group remove <mesh address> [...]")
     elif cmd == "cmd":
         command = bytes.fromhex("".join(rest[1:]))
         if not 1 <= len(command) <= 10:

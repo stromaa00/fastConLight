@@ -90,6 +90,7 @@
       <div class="row">
         <select id="target"><option value="all">All lights (address 0)</option></select>
         <input type="number" id="target-manual" class="fixed" style="width:80px" min="1" max="255" placeholder="addr">
+        <input type="number" id="target-group" class="fixed" style="width:80px" min="1" max="255" placeholder="group" title="Group id: switches that group (every light type), like the app">
       </div>
       <label class="check" style="margin-top:6px"><input type="checkbox" id="present-types"> only show light types seen in discovery</label>
       <div class="row" style="margin-top:10px">
@@ -210,7 +211,8 @@ function connectSocket() {
 
 function target() {
   const manual = $("target-manual").value.trim();
-  return manual || $("target").value;
+  const group = $("target-group").value.trim();
+  return manual || (group ? `group:${group}` : $("target").value);
 }
 const percent = () => $("brightness").value;
 
@@ -378,7 +380,7 @@ document.addEventListener("click", (e) => {
 // Last settings, kept in the browser between visits and server restarts
 const STORE = "brmesh-debug-settings";
 const SAVED = ["host", "port", "key", "phone_key", "duration", "interval", "target-manual",
-  "brightness", "color", "live", "relay", "autoscroll", "watch", "raw", "present-types"];
+  "brightness", "color", "live", "relay", "autoscroll", "watch", "raw", "present-types", "target-group"];
 let savedTarget = null;
 let watching = false;
 
