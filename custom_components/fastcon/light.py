@@ -301,14 +301,19 @@ class FastconGroupLight(_FastconLightBase):
     lights, addressed to the group id. Its lights take over the state.
     """
 
-    # Named after its group device (the group's name)
-    _attr_name = None
+    # Just the group's name; its device is called "[Group] <name>" to sort first
+    _attr_has_entity_name = False
 
     def __init__(self, hub: FastconHub, group_id: int) -> None:
         super().__init__(hub, {ColorMode.RGB, ColorMode.WHITE})
         self._group_id = group_id
         self._attr_unique_id = f"{hub.entry.entry_id}_group_{group_id}"
         self._attr_device_info = group_device_info(hub, group_id)
+
+    @property
+    def name(self) -> str:
+        """The group's name, following renames."""
+        return self._hub.groups.get(self._group_id, f"Group {self._group_id}")
 
     @property
     def extra_state_attributes(self) -> dict:

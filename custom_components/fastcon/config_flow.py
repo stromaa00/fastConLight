@@ -158,6 +158,12 @@ class FastconOptionsFlow(OptionsFlow):
             menu_options=["overview", "settings", "groups", "effects", "add_device"],
         )
 
+    def _light_name(self, device) -> str:
+        """The light's name in Home Assistant (as renamed there), else BRMesh <id>."""
+        entry = dr.async_get(self.hass).async_get_device(identifiers={(DOMAIN, device.did)})
+        name = (entry and (entry.name_by_user or entry.name)) or f"BRMesh {device.name}"
+        return name if name.endswith(device.name) else f"{name} ({device.name})"
+
     async def async_step_overview(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -167,13 +173,11 @@ class FastconOptionsFlow(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(data=dict(self.config_entry.options))
         hub = self.config_entry.runtime_data
-        registry = dr.async_get(self.hass)
         rows = []
         for device in sorted(
             hub.devices.values(), key=lambda d: (d.mesh_address, d.group, d.did)
         ):
-            entry = registry.async_get_device(identifiers={(DOMAIN, device.did)})
-            name = (entry and (entry.name_by_user or entry.name)) or f"BRMesh {device.name}"
+            name = self._light_name(device)
             address = str(device.mesh_address)
             if device.new_address is not None and device.new_address != device.mesh_address:
                 address += f" → {device.new_address}" + (
@@ -395,7 +399,7 @@ class FastconOptionsFlow(OptionsFlow):
         light_options = [
             selector.SelectOptionDict(
                 value=d.did,
-                label=f"BRMesh {d.name} (address {d.mesh_address})"
+                label=f"{self._light_name(d)} (address {d.mesh_address})"
                 + (
                     f" - now in {hub.groups.get(d.group, d.group)}"
                     if d.group and d.group != group_id

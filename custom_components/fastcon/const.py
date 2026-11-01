@@ -88,6 +88,12 @@ def signal_effects_changed(entry_id: str) -> str:
     return f"{DOMAIN}_effects_changed_{entry_id}"
 
 
+def group_device_name(name: str) -> str:
+    """Name of a group's device: the prefix sorts groups first in the hub's
+    connected devices (Home Assistant sorts them by name)."""
+    return f"[Group] {name}"
+
+
 def group_device_id(entry_id: str, group_id: int) -> str:
     """Device registry identifier of a group (its own device under the hub)."""
     return f"{entry_id}_group_{group_id}"

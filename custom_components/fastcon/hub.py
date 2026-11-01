@@ -46,6 +46,7 @@ from .const import (
     DEFAULT_EFFECTS,
     UNAVAILABLE_AFTER,
     group_device_id,
+    group_device_name,
     signal_effects_changed,
     signal_availability,
     signal_device_updated,
@@ -737,7 +738,8 @@ class FastconHub:
         entry_id = self.entry.entry_id
         hub_device = registry.async_get_device(identifiers={(DOMAIN, entry_id)})
         group_devices = {}
-        for group_id, name in self.groups.items():
+        for group_id, group_name in self.groups.items():
+            name = group_device_name(group_name)
             device = registry.async_get_or_create(
                 config_entry_id=entry_id,
                 identifiers={(DOMAIN, group_device_id(entry_id, group_id))},
