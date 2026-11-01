@@ -34,7 +34,7 @@ Uses the Bluetooth adapter of the Home Assistant host, so no ESP32 is needed. Co
 3. **Settings → Devices & Services → Add Integration → BRMesh / Fastcon**, pick the adapter and enter the phone key (default `A1A2A3A4`)
 4. Press **Scan for devices**, then **Bind all devices**. Or turn on **Auto-bind discovered lights** to have every light found by a scan bound automatically.
 
-**Mesh addresses:** on a light's device page, set **Mesh address** and press **Bind**; nothing is sent before that. **Bound mesh address** shows the address in use. Several lights may get the same address, then they switch together.
+**Mesh addresses:** on a light's device page, set **Mesh address** and press **Bind**; nothing is sent before that. **Bound mesh address** shows the address in use and only changes once the light's heartbeat comes from the new address (power cycle the light if it doesn't). Several lights may get the same address, then they switch together.
 
 Lights already set up in ESPHome can be added under the integration's **Configure → Add a light manually**.
 
@@ -67,6 +67,8 @@ python tools/brmesh_web.py        # http://127.0.0.1:8099
 ```
 
 Broadcast time per command and time between packets are adjustable in both; the packet interval needs the `set_brmesh_interval` action from [brmesh-transmitter.yaml](brmesh-transmitter.yaml) on the ESP32.
+
+**Watch address** (shell: `watch 11:22`) shows everything an address sends, with all advertisement fields and BRMesh frames decrypted; **Decode** (`decode <hex>`) decodes a payload you copied from a log.
 
 `--help` lists the one-shot commands (`info`, `scan`, `sniff`, `on`, …); `help` in the shell lists the shell commands. While the tool is connected, Home Assistant gets no Bluetooth advertisements from that ESP32 (ESPHome passes them to one client only) until it reconnects.
 

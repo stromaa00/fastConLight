@@ -50,7 +50,8 @@
   #log div { padding: 1px 0; }
   .k-send { color: var(--send); } .k-recv { color: var(--recv); } .k-found { color: var(--found); font-weight: 600; }
   .k-beat { color: var(--beat); } .k-esp { color: var(--esp); } .k-info { color: var(--info); }
-  .k-error { color: var(--err); } .k-cmd { color: var(--muted); }
+  .filters .check { font-weight: normal; }
+  .k-error { color: var(--err); } .k-cmd { color: var(--muted); } .k-watch { color: #e3b341; }
   .filters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
   #cmdline { font-family: ui-monospace, Consolas, monospace; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
@@ -90,6 +91,7 @@
         <select id="target"><option value="all">All lights (address 0)</option></select>
         <input type="number" id="target-manual" class="fixed" style="width:80px" min="1" max="255" placeholder="addr">
       </div>
+      <label class="check" style="margin-top:6px"><input type="checkbox" id="present-types"> only show light types seen in discovery</label>
       <div class="row" style="margin-top:10px">
         <button data-needs-conn id="on">On</button>
         <button data-needs-conn id="off">Off</button>
@@ -121,6 +123,21 @@
       </div>
       <div class="hint">Power cycle a light to put it in discovery mode, then scan.</div>
     </section>
+
+    <section>
+      <h2>Watch address</h2>
+      <div class="row">
+        <input type="text" id="watch" placeholder="11:22 (lights), any (all senders) or a MAC">
+        <button data-needs-conn class="fixed" id="watch-on">Watch</button>
+        <button data-needs-conn class="fixed" id="watch-off">Off</button>
+      </div>
+      <div class="hint">Shows every advertisement from matching addresses: all fields, and BRMesh frames decrypted with the phone key. <b>any</b> shows every BRMesh frame from any sender, e.g. the BRMesh app on a phone. Repeats within 2 s are skipped.</div>
+      <label>Decode payload (bytes after FFF0)</label>
+      <div class="row">
+        <input type="text" id="decode" placeholder="6e 6c 69 bc ...">
+        <button data-needs-conn class="fixed" id="decode-run">Decode</button>
+      </div>
+    </section>
   </div>
 
   <div class="col">
@@ -135,11 +152,12 @@
     <section id="log-section">
       <h2>Log</h2>
       <div class="filters">
-        <label class="check"><input type="checkbox" data-kind="send" checked> sent</label>
-        <label class="check"><input type="checkbox" data-kind="recv" checked> received</label>
-        <label class="check"><input type="checkbox" data-kind="found" checked> discovery</label>
-        <label class="check"><input type="checkbox" data-kind="beat" checked> heartbeats</label>
-        <label class="check"><input type="checkbox" data-kind="esp" checked> ESP32 log</label>
+        <label class="check k-send"><input type="checkbox" data-kind="send" checked> sent</label>
+        <label class="check k-recv"><input type="checkbox" data-kind="recv" checked> received</label>
+        <label class="check k-found"><input type="checkbox" data-kind="found" checked> discovery</label>
+        <label class="check k-beat"><input type="checkbox" data-kind="beat" checked> heartbeats</label>
+        <label class="check k-esp"><input type="checkbox" data-kind="esp" checked> ESP32 log</label>
+        <label class="check k-watch"><input type="checkbox" data-kind="watch" checked> watch</label>
         <label class="check"><input type="checkbox" id="show-all"> all broadcasts</label>
         <label class="check"><input type="checkbox" id="autoscroll" checked> autoscroll</label>
         <button id="clear" style="padding:2px 8px">Clear</button>
@@ -214,13 +232,17 @@ function render() {
     <span>Timing</span><span>${state.duration} ms per command, packets every ${state.interval ? state.interval + " ms" : "(firmware setting)"}</span>
     ${state.interval_supported ? "" : `<span>Interval</span><span style="color:var(--warn)">not adjustable: add set_brmesh_interval to the ESP32 YAML</span>`}` : "";
   if (c) $("show-all").checked = state.show_all;
+  $("watch-off").disabled = !c || !state.watch;
+  if (c && state.watch && document.activeElement !== $("watch")) $("watch").value = state.watch;
 
   const disc = state.discovered || [];
   $("discovered").innerHTML = disc.length ? `<table>
     <tr><th>Name</th><th>DID</th><th>Type</th><th>Key</th><th>Addr</th><th>Address</th><th></th></tr>
     ${disc.map((d, i) => `<tr>
       <td><b>${esc(d.name)}</b></td><td><code>${esc(d.did)}</code></td><td>${esc(d.type)}</td>
-      <td><code>${esc(d.key)}</code></td><td>${d.address || "–"}</td>
+      <td><code>${esc(d.key)}</code></td><td>${d.address || "–"}${d.heartbeat && d.address
+        ? ` <span title="Heartbeat received from this address" style="color:var(--ok)">♥</span>` : ""}${d.pending
+        ? ` <span title="Bind sent, waiting for a heartbeat from this address" style="color:var(--warn)">→ ${d.pending}?</span>` : ""}</td>
       <td><input type="number" min="1" max="255" id="bind-${i}" data-addr-for="${esc(d.did)}"
         value="${addrInput[d.did] ?? (d.address || "")}" title="Mesh address to bind to and to switch"></td>
       <td class="row" style="flex-wrap:nowrap">
@@ -240,10 +262,25 @@ function render() {
 
   // Target options: all + addresses known from discovery and heartbeats
   const addrs = new Set([...disc.map((d) => d.address).filter(Boolean), ...beats.map((b) => b.address)]);
-  const sel = $("target"), current = sel.value;
-  sel.innerHTML = `<option value="all">All lights (address 0)</option>` +
+  const sel = $("target"), current = savedTarget ?? sel.value;
+  // Device types seen in discovery: "every light of this type", as the app switches all
+  // "Every light of a type", as the app switches all; types seen in discovery first
+  const seen = new Set(disc.map((d) => d.type_code));
+  const types = [...(state.light_types || [])].sort((a, b) => seen.has(b[0]) - seen.has(a[0]));
+  sel.innerHTML = `<option value="types">All lights, every type (type 3, like the app)</option>` +
+    types.filter(([code]) => !$("present-types").checked || seen.has(code))
+      .map(([code, name]) => {
+        const hex = code.toString(16).toUpperCase().padStart(4, "0");
+        return `<option value="type:${hex}">All ${esc(name)} – 0x${hex} (${code})${seen.has(code) ? " ✓" : ""}</option>`;
+      }).join("") +
+    `<option value="all">All lights (address 0, off doesn't work)</option>` +
     [...addrs].sort((a, b) => a - b).map((a) => `<option value="${a}">Address ${a}</option>`).join("");
-  sel.value = [...sel.options].some((o) => o.value === current) ? current : "all";
+  if ([...sel.options].some((o) => o.value === current)) {
+    sel.value = current;
+    savedTarget = null;
+  } else {
+    sel.value = "types";
+  }
 }
 
 async function refresh() {
@@ -253,10 +290,13 @@ async function refresh() {
 
 $("connect").onclick = async () => {
   $("connect").disabled = true;
-  await api("/api/connect", {
+  saveSettings();
+  const res = await api("/api/connect", {
     host: $("host").value, port: $("port").value, key: $("key").value,
     phone_key: $("phone_key").value, duration: $("duration").value, interval: $("interval").value,
   });
+  // Resume watching an address if it was on last time
+  if (res.ok && watching && $("watch").value.trim()) await run(`watch ${$("watch").value.trim()}`);
   refresh();
 };
 $("disconnect").onclick = () => api("/api/disconnect", {}).then(refresh);
@@ -283,6 +323,16 @@ $("apply").onclick = async () => {
   if ($("interval").value) await run(`interval ${$("interval").value}`);
 };
 $("send-raw").onclick = () => run(`raw ${$("raw").value.replace(/\s/g, "")}`);
+$("watch-on").onclick = () => {
+  const a = $("watch").value.trim();
+  if (!a) return;
+  watching = true;
+  saveSettings();
+  run(`watch ${a}`);
+};
+$("watch-off").onclick = () => { watching = false; saveSettings(); run("watch off"); };
+$("decode-run").onclick = () => { const h = $("decode").value.replace(/\s/g, ""); if (h) run(`decode ${h}`); };
+$("present-types").onchange = () => render();
 $("show-all").onchange = (e) => run(`all ${e.target.checked ? "on" : "off"}`);
 $("clear").onclick = () => ($("log").innerHTML = "");
 $("run").onclick = () => { const l = $("cmdline").value.trim(); if (l) { run(l); $("cmdline").value = ""; } };
@@ -325,11 +375,52 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// Last settings, kept in the browser between visits and server restarts
+const STORE = "brmesh-debug-settings";
+const SAVED = ["host", "port", "key", "phone_key", "duration", "interval", "target-manual",
+  "brightness", "color", "live", "relay", "autoscroll", "watch", "raw", "present-types"];
+let savedTarget = null;
+let watching = false;
+
+function saveSettings() {
+  const s = { hidden: [...hidden], target: savedTarget ?? $("target").value, watching };
+  for (const id of SAVED) s[id] = $(id).type === "checkbox" ? $(id).checked : $(id).value;
+  localStorage.setItem(STORE, JSON.stringify(s));
+}
+
+function loadSettings() {
+  let s;
+  try { s = JSON.parse(localStorage.getItem(STORE)); } catch { s = null; }
+  if (!s) return {};
+  for (const id of SAVED) {
+    if (!(id in s)) continue;
+    if ($(id).type === "checkbox") $(id).checked = s[id];
+    else $(id).value = s[id];
+  }
+  $("bri-val").textContent = percent();
+  for (const kind of s.hidden || []) {
+    hidden.add(kind);
+    const cb = document.querySelector(`.filters input[data-kind="${kind}"]`);
+    if (cb) cb.checked = false;
+  }
+  savedTarget = s.target || null;
+  watching = !!s.watching;
+  return s;
+}
+
+document.addEventListener("change", (e) => {
+  if (e.target.id === "target") savedTarget = null;
+  if (e.target.id !== "show-all") saveSettings();
+});
+document.addEventListener("input", saveSettings);
+
 (async () => {
+  const saved = loadSettings();
   const d = await api("/api/defaults");
-  if (d.host) $("host").value = d.host;
-  if (d.key) $("key").value = d.key;
-  if (d.phone_key) $("phone_key").value = d.phone_key;
+  // Saved values win over the BRMESH_* environment defaults
+  if (d.host && !saved.host) $("host").value = d.host;
+  if (d.key && !saved.key) $("key").value = d.key;
+  if (d.phone_key && !saved.phone_key) $("phone_key").value = d.phone_key;
   connectSocket();
   await refresh();
   setInterval(() => state.connected && refresh(), 3000);

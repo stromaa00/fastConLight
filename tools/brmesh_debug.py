@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 from datetime import datetime
 import importlib.util
 import os
@@ -24,6 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 import shlex
 import sys
+import time
 
 from aioesphomeapi import APIClient, LogLevel, UserService
 
@@ -56,6 +58,135 @@ def _manufacturer_data(adv: bytes, company_id: int) -> bytes | None:
     return None
 
 
+AD_TYPES = {
+    0x01: "flags",
+    0x02: "uuid16 (part)",
+    0x03: "uuid16",
+    0x08: "short name",
+    0x09: "name",
+    0x0A: "tx power",
+    0x16: "service data",
+    0xFF: "manufacturer",
+}
+
+
+def _ad_structures(adv: bytes) -> list[str]:
+    """Readable list of the AD structures in a raw advertisement."""
+    parts = []
+    i = 0
+    while i < len(adv):
+        length = adv[i]
+        if length == 0 or i + 1 + length > len(adv):
+            parts.append(f"trailing {adv[i:].hex()}")
+            break
+        kind, data = adv[i + 1], adv[i + 2 : i + 1 + length]
+        name = AD_TYPES.get(kind, f"type 0x{kind:02X}")
+        if kind in (0x08, 0x09):
+            parts.append(f"{name} '{data.decode(errors='replace')}'")
+        elif kind == 0xFF and len(data) >= 2:
+            parts.append(f"{name} 0x{data[0] | (data[1] << 8):04X}: {data[2:].hex(' ')}")
+        else:
+            parts.append(f"{name}: {data.hex(' ')}")
+        i += 1 + length
+    return parts
+
+
+def _xor_frame(body: bytes, phone_key: bytes) -> tuple[bytes, bytes, bool]:
+    """Header decrypted with the default key, data with the phone key, checksum ok."""
+    header = bytes(b ^ protocol.DEFAULT_ENCRYPT_KEY[i] for i, b in enumerate(body[:4]))
+    data = bytes(b ^ phone_key[i & 3] for i, b in enumerate(body[4:]))
+    checksum_ok = len(header) == 4 and (sum(header[:3]) + sum(data)) & 0xFF == header[3]
+    return header, data, checksum_ok
+
+
+def _decode_new_protocol(payload: bytes, phone_key: bytes) -> str:
+    """Newer devices' a5 5a frames: layout unknown, so show every plausible reading.
+
+    The BRMesh app builds them natively (bl_get_ble_payload). Shown: the bytes
+    as sent, decrypted like an old-protocol body, and the same after removing
+    the whitening the old RF frames use.
+    """
+    body = payload[2:]
+    buf = bytearray(0x0F) + bytearray(body)
+    protocol.whiten(buf)
+    dewhitened = bytes(buf[0x0F:])
+    lines = [f"           = new protocol frame ({len(body)} bytes after a5 5a, layout unknown)"]
+    for label, candidate in (("as sent   ", body), ("dewhitened", dewhitened)):
+        header, data, ok = _xor_frame(candidate, phone_key)
+        lines.append(
+            f"           {label} raw {candidate.hex(' ')}\n"
+            f"                      header {header.hex(' ')}  data {data.hex(' ')}"
+            f"  checksum {'OK' if ok else '-'}"
+        )
+    return "\n".join(lines)
+
+
+def _guess_phone_key(payload: bytes) -> bytes | None:
+    """The phone key of a frame from another mesh, read from its zero padding.
+
+    Data bytes 8-11 are usually zero, so there the encrypted bytes are the key
+    itself. Accepted only if header byte 2 (last key byte) and the checksum agree.
+    """
+    body = protocol.unwrap_rf_frame(payload) or payload
+    if len(body) < 16:
+        return None
+    candidate = bytes(body[12:16])
+    header, data, ok = _xor_frame(body, candidate)
+    return candidate if ok and header[2] == candidate[3] else None
+
+
+def _decode_brmesh(payload: bytes, phone_key: bytes) -> str:
+    """All fields of a BRMesh frame, decrypted with the phone key."""
+    if payload[:2] == protocol.NEW_PROTOCOL_MAGIC:
+        return _decode_new_protocol(payload, phone_key)
+    info = protocol.describe_broadcast(payload, phone_key)
+    if info.get("key") == "phone key" and info.get("checksum_ok") is False:
+        if (guess := _guess_phone_key(payload)) is not None and guess != phone_key:
+            return (
+                f"           ! other mesh: phone key is probably {guess.hex().upper()} "
+                f"(read from the zero padding, checksum ok)\n" + _decode_brmesh(payload, guess)
+            )
+    beat = protocol.parse_heartbeat(payload, phone_key)
+    mesh = beat.mesh_address if beat else info.get("mesh_address")
+    body = protocol.unwrap_rf_frame(payload) or payload
+    header = bytes(b ^ protocol.DEFAULT_ENCRYPT_KEY[i] for i, b in enumerate(body[:4]))
+    lines = [
+        f"           = {protocol.describe_action({**info, 'header_mesh': mesh})}",
+        f"           header {header.hex(' ')}  (type {info.get('header_type')} {info.get('kind')}, "
+        f"forward={info.get('forward')}, seq={info.get('sequence')}, byte2={info.get('safe_key')}, "
+        f"data {info.get('key')}, checksum "
+        + {True: "ok", False: "wrong" + (" (other phone key?)" if info.get("key") == "phone key" else ""),
+           None: "not checkable"}[info.get("checksum_ok")] + ")",
+        f"           data   {bytes.fromhex(info['data']).hex(' ') if 'data' in info else '-'}",
+    ]
+    if beat:
+        lines.append(f"           heartbeat: mesh address {beat.mesh_address}, group {beat.group_address}")
+    if info.get("kind") == "control" and info.get("checksum_ok") and info.get("control_type") == 3:
+        # Seen from the BRMesh app for "all on": 43 2a a8 00 80 = type 3, device
+        # type A82A (RGBCW), then 00 80. Meaning of the last bytes is a guess.
+        data = bytes.fromhex(info["data"])
+        device_type = data[1] | (data[2] << 8)
+        lines.append(
+            f"           control type 3 (by device type?): {protocol.device_type_name(device_type)} "
+            f"(0x{device_type:04X}), then {data[3:1 + (data[0] >> 4)].hex(' ')}"
+        )
+    elif info.get("kind") == "control" and info.get("checksum_ok") and "mesh_address" in info:
+        target = info["mesh_address"]
+        meaning = {0: " (all lights)", 253: " (temporary group)", 254: " (music group)", 255: " (gateway)"}
+        group = " (room/scene group)" if 240 <= target <= 243 else ""
+        lines.append(
+            f"           control: to mesh address {target}{meaning.get(target, group)}, "
+            f"control type {info.get('control_type')}, command {info.get('command')}"
+        )
+    if "device_type" in info:
+        lines.append(
+            f"           device: {info['device_type_name']} (type {info['device_type']} = "
+            f"0x{info['device_type']:04X}), DID {info['did']}, key {info['device_key']}, "
+            f"identity {info['did'][-4:]}-{info['did']}-{info['device_type']:04X}-{info['device_key']}"
+        )
+    return "\n".join(lines)
+
+
 def _now() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
@@ -76,11 +207,16 @@ class Debugger:
         # Packet interval set through set_brmesh_interval; None = firmware setting
         self.interval_ms: int | None = None
         self.show_all = False
+        # Show every advertisement (any content) from addresses starting with this
+        self.watch: str | None = None
+        self._watch_last: dict[tuple[str, bytes], float] = {}
         self.verbose = False
         self.sniffing = False
         self.discovered: dict[str, protocol.DiscoveredDevice] = {}
         # Mesh address -> (group address, rssi, time) of the last heartbeat
         self.heartbeats: dict[int, tuple[int, int, str]] = {}
+        # DID -> address a bind was sent for; adopted when a heartbeat comes from it
+        self.pending_binds: dict[str, int] = {}
         self._own: set[bytes] = set()
         self._unsub: list = []
 
@@ -138,6 +274,15 @@ class Debugger:
             bytes.fromhex(did), address, self.phone_key, bytes.fromhex(key)
         )
         await self.send(payload, f"bind {did[-4:].upper()} to mesh address {address}")
+        self.pending_binds[did.upper()] = address
+
+    async def light_by_type(self, device_type: int, command: bytes) -> None:
+        payload = self.builder.light_by_type(device_type, self.phone_key, command)
+        await self.send(
+            payload,
+            f"all {protocol.device_type_name(device_type)} lights: "
+            f"{protocol.describe_command(command)}",
+        )
 
     async def light(self, address: int, command: bytes) -> None:
         payload = self.builder.light(address, self.phone_key, command)
@@ -167,11 +312,35 @@ class Debugger:
 
         def on_advertisements(msg) -> None:
             for adv in msg.advertisements:
+                if self.watch and (
+                    # "ANY": every BRMesh frame from any sender (e.g. the phone app)
+                    _manufacturer_data(adv.data, protocol.MANUFACTURER_ID) is not None
+                    if self.watch == "ANY"
+                    else _mac(adv.address).startswith(self.watch)
+                ):
+                    self._on_watch(_mac(adv.address), adv.rssi, bytes(adv.data))
                 payload = _manufacturer_data(adv.data, protocol.MANUFACTURER_ID)
                 if payload is not None:
                     self._on_brmesh(_mac(adv.address), adv.rssi, payload)
 
         self._unsub.append(self.client.subscribe_bluetooth_le_raw_advertisements(on_advertisements))
+
+    def _on_watch(self, address: str, rssi: int, adv: bytes) -> None:
+        """Everything a watched address sends; repeats within 2 s are skipped."""
+        now = time.monotonic()
+        key = (address, adv)
+        if now - self._watch_last.get(key, -10) < 2:
+            self._watch_last[key] = now
+            return
+        self._watch_last[key] = now
+        if len(self._watch_last) > 500:
+            self._watch_last = {k: t for k, t in self._watch_last.items() if now - t < 2}
+        text = f"{_now()} WATCH {address} rssi={rssi}  adv={adv.hex(' ')}\n           " + (
+            "\n           ".join(_ad_structures(adv))
+        )
+        if (payload := _manufacturer_data(adv, protocol.MANUFACTURER_ID)) is not None:
+            text += "\n" + _decode_brmesh(payload, self.phone_key)
+        self.emit("watch", text)
 
     def _on_brmesh(self, address: str, rssi: int, payload: bytes) -> None:
         own = payload in self._own
@@ -183,7 +352,7 @@ class Debugger:
             new = did not in self.discovered
             self.discovered[did] = found
             if new or self.show_all:
-                kind = protocol.LIGHT_TYPE_NAMES.get(found.device_type, f"type {found.device_type:04X}")
+                kind = protocol.device_type_name(found.device_type)
                 self.emit(
                     "found",
                     f"{_now()} FOUND {found.name}  did={did} {kind} key={found.key.hex().upper()} "
@@ -193,11 +362,12 @@ class Debugger:
             return
         if (beat := protocol.parse_heartbeat(payload, self.phone_key)) is not None:
             self.heartbeats[beat.mesh_address] = (beat.group_address, rssi, _now()[:8])
+            self._confirm_binds(beat.mesh_address)
             if self.show_all:
                 self.emit(
                     "beat",
                     f"{_now()} BEAT address={beat.mesh_address} group={beat.group_address} "
-                    f"from={address} rssi={rssi}"
+                    f"from={address} rssi={rssi} raw={payload.hex()}"
                 )
             return
         if own and not self.show_all:
@@ -212,11 +382,28 @@ class Debugger:
             f"rssi={rssi} raw={payload.hex()}"
         )
 
+    def _confirm_binds(self, mesh_address: int) -> None:
+        """Adopt the address of lights whose bind to it a heartbeat now confirms.
+
+        Heartbeats carry no DID, so every light with a bind sent to this
+        address counts as confirmed.
+        """
+        for did, address in list(self.pending_binds.items()):
+            if address != mesh_address:
+                continue
+            del self.pending_binds[did]
+            if (found := self.discovered.get(did)) is not None:
+                self.discovered[did] = dataclasses.replace(found, mesh_address=address)
+            self.emit(
+                "found",
+                f"{_now()} BOUND {did[-4:]} confirmed by heartbeat: mesh address {address}",
+            )
+
     def print_discovered(self) -> None:
         if not self.discovered:
             self.emit("info", "No lights discovered yet.")
         for did, found in self.discovered.items():
-            kind = protocol.LIGHT_TYPE_NAMES.get(found.device_type, f"type {found.device_type:04X}")
+            kind = protocol.device_type_name(found.device_type)
             self.emit(
                 "info",
                 f"  {found.name}  did={did}  {kind}  key={found.key.hex().upper()}  "
@@ -253,7 +440,7 @@ def _light_command(name: str, values: list[str]) -> bytes:
     if name == "off":
         return protocol.light_off()
     if name == "brightness":
-        return protocol.light_on(_level(values[0]))
+        return protocol.light_brightness(_level(values[0]))
     if name == "rgb":
         r, g, b = (int(v) for v in values[:3])
         return protocol.light_rgb(r, g, b, _level(values[3]) if len(values) > 3 else 127)
@@ -276,16 +463,23 @@ SHELL_HELP = """\
   found                              list discovered lights
   bind <did> <key> <address>         bind a light (also: bind <identity> <address>)
   bind found <address>               bind the only discovered light
-  on <address|all> [percent]         turn on
+  on <address|all|type:XXXX|types> [pct]
+                                     turn on; type:A82A = every light of that device type (as
+                                     the app switches "all"); types = every light type (those
+                                     seen in discovery, else all 9 known); all = mesh address 0
   off <address|all>                  turn off
-  brightness <address|all> <percent>
+  brightness <address|all> <percent>  brightness only (no on bit, min 5); "on <addr> <percent>" = on + brightness
   rgb <address|all> <r> <g> <b> [percent]
   white <address|all> [percent]
+  cmd <address|all> <hex>            send any command bytes as a control command, e.g. cmd all 80
   raw <hex>                          send a 24-byte payload as is
   duration <ms>                      advertising time per command
   interval <ms>                      time between packets (needs set_brmesh_interval)
   key <hex>                          phone key (8 hex chars)
   all on|off                         also show heartbeats, status and our own packets
+  watch <address|prefix>|any|off     show everything from an address, decoded (e.g. watch 11:22);
+                                     any = every BRMesh frame from any sender (phone app too)
+  decode <hex>                       decode a BRMesh payload (bytes after FFF0)
   info                               device info and actions
   quit
 """
@@ -315,7 +509,24 @@ async def run_line(dbg: Debugger, line: str) -> bool:
         else:
             await dbg.bind(*_parse_bind(rest))
     elif cmd in ("on", "off", "brightness", "rgb", "white"):
-        await dbg.light(_address(rest[0]), _light_command(cmd, rest[1:]))
+        command = _light_command(cmd, rest[1:])
+        if rest[0].lower() == "types":
+            # Every light type: those seen in discovery, else all known light types
+            types = sorted(
+                {f.device_type for f in dbg.discovered.values() if protocol.is_light(f.device_type)}
+            ) or sorted(protocol.LIGHT_TYPE_NAMES)
+            for device_type in types:
+                await dbg.light_by_type(device_type, command)
+        elif rest[0].lower().startswith("type:"):
+            # type:<hex> = every light of that device type, like the app's all on/off
+            await dbg.light_by_type(int(rest[0][5:], 16), command)
+        else:
+            await dbg.light(_address(rest[0]), command)
+    elif cmd == "cmd":
+        command = bytes.fromhex("".join(rest[1:]))
+        if not 1 <= len(command) <= 10:
+            raise ValueError("1 to 10 command bytes")
+        await dbg.light(_address(rest[0]), command)
     elif cmd == "raw":
         await dbg.send(bytes.fromhex(rest[0]), "raw payload")
     elif cmd == "duration":
@@ -326,6 +537,17 @@ async def run_line(dbg: Debugger, line: str) -> bool:
     elif cmd == "key":
         dbg.phone_key = bytes.fromhex(rest[0])
         dbg.emit("info", f"Phone key {dbg.phone_key.hex().upper()}.")
+    elif cmd == "watch":
+        target = rest[0].upper() if rest else "OFF"
+        dbg.watch = None if target == "OFF" else target
+        dbg._watch_last.clear()
+        if dbg.watch == "ANY":
+            dbg.emit("info", "Watching every BRMesh frame from any sender.")
+        else:
+            dbg.emit("info", f"Watching {dbg.watch}." if dbg.watch else "Watch off.")
+    elif cmd == "decode":
+        payload = bytes.fromhex("".join(rest))
+        dbg.emit("info", f"{payload.hex(' ')}\n" + _decode_brmesh(payload, dbg.phone_key))
     elif cmd == "all":
         dbg.show_all = not rest or rest[0] == "on"
         dbg.emit("info", f"Showing all broadcasts: {'on' if dbg.show_all else 'off'}.")
@@ -363,6 +585,7 @@ async def main() -> None:
     parser.add_argument("--duration", type=int, default=1000, help="advertising time per command in ms")
     parser.add_argument("--interval", type=int, help="time between packets in ms (set on connect)")
     parser.add_argument("--all", action="store_true", help="show every BRMesh broadcast")
+    parser.add_argument("--watch", help="show everything from addresses starting with this, e.g. 11:22")
     parser.add_argument("--no-logs", action="store_true", help="don't show the ESP32's log")
     parser.add_argument("-v", "--verbose", action="store_true", help="ESP32 log at verbose level")
     sub = parser.add_subparsers(dest="command")
@@ -387,6 +610,7 @@ async def main() -> None:
 
     dbg = Debugger(args)
     dbg.show_all = args.all
+    dbg.watch = args.watch.upper() if args.watch else None
     dbg.verbose = args.verbose
     await dbg.connect()
     try:

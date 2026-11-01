@@ -59,15 +59,20 @@ class Session:
             "interval": dbg.interval_ms,
             "interval_supported": dbg.interval_action is not None,
             "show_all": dbg.show_all,
+            "watch": dbg.watch,
+            "light_types": [
+                [code, name] for code, name in sorted(debug.protocol.LIGHT_TYPE_NAMES.items())
+            ],
             "discovered": [
                 {
                     "name": found.name,
                     "did": did,
-                    "type": debug.protocol.LIGHT_TYPE_NAMES.get(
-                        found.device_type, f"Type {found.device_type:04X}"
-                    ),
+                    "type": debug.protocol.device_type_name(found.device_type),
+                    "type_code": found.device_type,
                     "key": found.key.hex().upper(),
                     "address": found.mesh_address,
+                    "pending": dbg.pending_binds.get(did),
+                    "heartbeat": found.mesh_address in dbg.heartbeats,
                     "identity": f"{found.name}-{did}-{found.device_type:04X}-{found.key.hex().upper()}",
                 }
                 for did, found in dbg.discovered.items()
