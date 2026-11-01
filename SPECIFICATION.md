@@ -193,15 +193,17 @@ Confirmed from commands relayed by real lights (October 2026). The ESP32 firmwar
 
 ## 5. Device Types
 
+The BRMesh app knows many more types than listed here, and two entries below are wrong (Fan is 44049; 43463/43462 are Relay 3, not Panel 3). The full list from the app is in [docs/BRMESH_APP_NOTES.md](docs/BRMESH_APP_NOTES.md#2-device-types).
+
 ### 5.1 Light Types
 
 | Device Type | Code (Dec) | Code (Hex) | Description |
 |-------------|------------|------------|-------------|
-| Light_RGBCW | 43050 | 0xA83A | RGB + Cold/Warm White |
+| Light_RGBCW | 43050 | 0xA82A | RGB + Cold/Warm White |
 | Light_RGB | 43168 | 0xA8A0 | RGB color |
-| Light_CCT | 43051 | 0xA83B | Color temperature adjustable |
+| Light_CCT | 43051 | 0xA82B | Color temperature adjustable |
 | Light_RGBW | 43169 | 0xA8A1 | RGB + White |
-| Light_PWR | 43049 | 0xA839 | Power control |
+| Light_PWR | 43049 | 0xA829 | Power control |
 | Light_W_CW | 43745 | 0xAAE1 | White + Cold/Warm |
 | Light_BURDEN_W | 43759 | 0xAAEF | White burden |
 | Light_BURDEN_CW | 43754 | 0xAAEA | Cold/Warm burden |
@@ -211,9 +213,9 @@ Confirmed from commands relayed by real lights (October 2026). The ESP32 firmwar
 
 | Device Type | Code (Dec) | Code (Hex) | Description |
 |-------------|------------|------------|-------------|
-| Curtain | 43499 | 0xA9DB | Curtain controller |
-| Fan | 43531 | 0xA9FB | Fan controller |
-| Gateway | 43500 | 0xA9DC | Mesh gateway |
+| Curtain | 43499 | 0xA9EB | Curtain controller |
+| Fan | 43531 | 0xAA0B | Fan controller |
+| Gateway | 43500 | 0xA9EC | Mesh gateway |
 | Gateway_AC | 43756 | 0xAAEC | AC gateway |
 | Gateway_IHG | 10058 | 0x274A | IHG gateway |
 | Panel_3 | 43463 | 0xA9C7 | 3-button panel |
@@ -224,15 +226,15 @@ Confirmed from commands relayed by real lights (October 2026). The ESP32 firmwar
 | Panel_6_Wireless | 43459 | 0xA9C3 | 6-button wireless panel |
 | Panel_8 | 43733 | 0xAAD5 | 8-button panel |
 | Panel_8_2 | 43734 | 0xAAD6 | 8-button panel v2 |
-| Relay_1 | 43525 | 0xA9E5 | Single relay |
+| Relay_1 | 43525 | 0xAA05 | Single relay |
 | Relay_2 | 43474 | 0xA9D2 | Dual relay |
 | Relay_4 | 43680 | 0xAAA0 | Quad relay |
-| Sensor_Door | 43505 | 0xA9D9 | Door sensor |
-| Sensor_IR | 43516 | 0xA9E4 | IR sensor |
+| Sensor_Door | 43505 | 0xA9F1 | Door sensor |
+| Sensor_IR | 43516 | 0xA9FC | IR sensor |
 | Sensor_Radar | 43808 | 0xAB20 | Radar sensor |
 | Sensor_Water | 43791 | 0xAB0F | Water sensor |
 | Thermostat | 43919 | 0xAB8F | Thermostat |
-| Meta_PAD | 43518 | 0xA9E6 | Meta pad |
+| Meta_PAD | 43518 | 0xA9FE | Meta pad |
 | Meta_PAD_2 | 43974 | 0xABC6 | Meta pad v2 |
 
 ---
@@ -332,7 +334,7 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
   - BlueZ's D-Bus `LEAdvertisement1` API is only a fallback: it reserves space for its own flags, so the kernel rejects the 31-byte packet with `Invalid Parameters (0x0d)` (seen on a Home Assistant Yellow).
   - MGMT needs `CAP_NET_ADMIN`, which the Home Assistant OS core container has.
 - **Queue:** one command is on air at a time. A newer command for the same light replaces an unsent one, so dragging a slider doesn't build a backlog.
-- **All lights:** each entry has an *All lights* light entity that sends one control command to mesh address 0 instead of one per light, and drops unsent commands for single lights. The single light entities take over its state. Address 0 is where the BRMesh app sends its time sync; that lights follow control commands to it is untested.
+- **All lights:** each entry has an *All lights* light entity. Like the BRMesh app, it sends one control command per light device type in the mesh (control type 3: `[3 | (n + 3) << 4] [type lo] [type hi] 00 [command]`, e.g. `43 2a a8 00 00` = all RGBCW off) instead of one per light, and drops unsent commands for single lights. With no known lights it falls back to mesh address 0, which lights follow for "on" but not "off". The single light entities take over its state. Details: [docs/BRMESH_APP_NOTES.md](docs/BRMESH_APP_NOTES.md).
 - **Storage:** discovered/added devices and their mesh addresses are saved in HA storage and survive restarts.
 - **Several meshes:** every config entry is one mesh with its own phone key (a second entry with a key already in use is refused). Entries may share an adapter and ESP32 transmitters; one lock across all entries keeps a single command on air at a time. Heartbeats carry a checksum over data encrypted with the phone key, so each entry only accepts its own lights' heartbeats. Discovery broadcasts don't reveal the mesh, so a light no entry knows is adopted by the entry that sent the most recent scan within the last 120 s (`SCAN_ADOPT_WINDOW`), otherwise by the first entry with auto-bind on, or by the first entry if none has it on; a light known to one entry is ignored by the others, and adding it manually to a second entry is refused. Bluetooth discovery only offers the first entry; further meshes are added with **Add entry**.
 
@@ -348,8 +350,8 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 | `button.<hub>_scan_for_devices` | Broadcasts the scan command |
 | `button.<hub>_bind_all_devices` | Presses every light's Bind button: binds each to its new mesh address if one is chosen, otherwise to its current one |
 | `number.brmesh_<name>_mesh_address` | Mesh address (1-255) for the light's next bind. Changing it sends nothing; Bind applies it. Several lights may share an address and then follow the same commands; their heartbeats can't be told apart, so they also share availability |
-| `button.brmesh_<name>_bind` | Binds just this light, to the chosen new mesh address if any (saved as pending until pressed) |
-| `sensor.brmesh_<name>_bound_mesh_address` | Read-only: the mesh address commands go to. Changes only through Mesh address + Bind (or auto-bind of a new light); attribute `pending_address` shows a chosen but unapplied address |
+| `button.brmesh_<name>_bind` | Binds just this light, to the chosen new mesh address if any. The light keeps its current address until a heartbeat from the new one confirms the bind; until then the bind is resent whenever the light announces itself |
+| `sensor.brmesh_<name>_bound_mesh_address` | Read-only: the mesh address commands go to. Changes only through Mesh address + Bind and a confirming heartbeat from the new address (or auto-bind of a new light). Attributes: `pending_address` (chosen, not yet confirmed) and `waiting_for_heartbeat` (bind sent). Heartbeats carry no DID, so a heartbeat from the new address confirms every light with a bind sent there, including when another light already uses it |
 | `switch.<hub>_auto_bind_discovered_lights` | When on, lights found by a scan are bound automatically (off by default, saved) |
 | `light.brmesh_<name>` | One per light; assumed state, restored after restart |
 

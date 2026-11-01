@@ -14,7 +14,7 @@ Control of BRMesh / Fastcon Bluetooth LE lights from Home Assistant. The repo ho
 | `components/fastcon/` + `fastcon-*.yaml` | Standalone ESPHome firmware (lights defined in YAML) | Maintained |
 | `src/` + `platformio.ini` | Original Arduino/PlatformIO firmware with MQTT | Legacy, kept as protocol reference |
 
-`SPECIFICATION.md` is the authoritative design/protocol document (§7.3 covers the HA integration in depth). `FUNCTIONAL_SPECIFICATION.md` analyses the original Arduino code. The Playwright setup (`package.json`, `playwright.config.ts`, `tests/example.spec.ts`, `index.html`, `script.js`, `styles.css`) is unrelated boilerplate.
+`SPECIFICATION.md` is the authoritative design/protocol document (§7.3 covers the HA integration in depth). `FUNCTIONAL_SPECIFICATION.md` analyses the original Arduino code. `docs/BRMESH_APP_NOTES.md` collects findings from the decompiled BRMesh app (full device type list, reserved addresses 0/240–243/253–255, group mechanism, captured packets, open questions); add new findings there. The Playwright setup (`package.json`, `playwright.config.ts`, `tests/example.spec.ts`, `index.html`, `script.js`, `styles.css`) is unrelated boilerplate.
 
 ## Commands
 

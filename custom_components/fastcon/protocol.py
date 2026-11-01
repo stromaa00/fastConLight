@@ -20,6 +20,10 @@ CMD_SCAN = 0
 CMD_DISCOVERY_RESPONSE = 2
 CMD_SINGLE_CONTROL = 5
 
+# Control types (low nibble of the first data byte of a control command)
+CONTROL_SINGLE = 2  # one mesh address
+CONTROL_BY_TYPE = 3  # every light of one device type ("all on/off" in the app)
+
 # Device type codes (see SPECIFICATION.md section 5)
 LIGHT_RGBCW = 43050
 LIGHT_RGB = 43168
@@ -42,6 +46,40 @@ LIGHT_TYPE_NAMES = {
     LIGHT_BURDEN_CW: "Light Burden CW",
     LIGHT_COMPOSE: "Light Compose",
 }
+
+
+# Other BRMesh devices, only named in logs (SPECIFICATION.md section 5)
+DEVICE_TYPE_NAMES = {
+    **LIGHT_TYPE_NAMES,
+    43499: "Curtain",
+    43531: "Fan",
+    43500: "Gateway",
+    43756: "Gateway AC",
+    10058: "Gateway IHG",
+    43463: "Panel 3",
+    43462: "Panel 3 wireless",
+    43473: "Panel 4",
+    43472: "Panel 4 wireless",
+    43461: "Panel 6",
+    43459: "Panel 6 wireless",
+    43733: "Panel 8",
+    43734: "Panel 8 v2",
+    43525: "Relay 1",
+    43474: "Relay 2",
+    43680: "Relay 4",
+    43505: "Sensor door",
+    43516: "Sensor IR",
+    43808: "Sensor radar",
+    43791: "Sensor water",
+    43919: "Thermostat",
+    43518: "Meta PAD",
+    43974: "Meta PAD 2",
+}
+
+
+def device_type_name(device_type: int) -> str:
+    """Name of a device type code, or its hex value if unknown."""
+    return DEVICE_TYPE_NAMES.get(device_type, f"unknown type 0x{device_type:04X}")
 
 
 def is_light(device_type: int) -> bool:
@@ -224,9 +262,24 @@ class CommandBuilder:
             i2=mesh_address // 256,
         )
 
+    def light_by_type(self, device_type: int, phone_key: bytes, command: bytes) -> bytes:
+        """Control command for every light of one device type.
+
+        This is how the BRMesh app switches all lights: control type 3, the
+        device type (little endian), a zero byte, then the command, e.g.
+        43 2a a8 00 80 (all RGBCW on) and 43 2a a8 00 00 (all RGBCW off).
+        """
+        data = bytearray(12)
+        data[0] = (CONTROL_BY_TYPE | ((len(command) + 3) << 4)) & 0xFF
+        data[1] = device_type & 0xFF
+        data[2] = (device_type >> 8) & 0xFF
+        data[4 : 4 + len(command)] = command
+        return self.generate(CMD_SINGLE_CONTROL, bytes(data), phone_key, forward=True)
+
 
 # Mesh address that every light in the mesh accepts. The BRMesh app sends its
-# time sync there; that lights also follow control commands to it is untested.
+# time sync there; lights follow "on" to it but ignore "off", so switching all
+# lights uses light_by_type instead.
 ALL_LIGHTS_ADDRESS = 0
 
 
@@ -238,6 +291,15 @@ def light_off() -> bytes:
 def light_on(level: int) -> bytes:
     """Turn a light on at brightness level 0-127."""
     return bytes((0x80 | (level & 0x7F),))
+
+
+def light_brightness(level: int) -> bytes:
+    """Change only the brightness, level 5-127 (no on bit; 0 would mean off).
+
+    Same as the ESPHome firmware's create_brightness_command; the BRMesh app's
+    minimum brightness is 5.
+    """
+    return bytes((max(5, min(127, level)),))
 
 
 def light_rgb(r: int, g: int, b: int, level: int) -> bytes:
@@ -361,8 +423,18 @@ def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
     if len(payload) < 4:
         return {"kind": "too short", "frame": frame}
     header = bytes(b ^ DEFAULT_ENCRYPT_KEY[i] for i, b in enumerate(payload[:4]))
-    content = bytes(b ^ phone_key[i & 3] for i, b in enumerate(payload[4:]))
     header_type = (header[0] >> 4) & 7
+    # The data part's key depends on the type: scans use the default key,
+    # discovery broadcasts are plain, binds use the light's device key (not
+    # known here), everything else the phone key.
+    key_name, content_key = {
+        0: ("default key", DEFAULT_ENCRYPT_KEY),
+        1: ("not encrypted", bytes(4)),
+        2: ("device key", None),
+    }.get(header_type, ("phone key", phone_key))
+    content = bytes(
+        b ^ content_key[i & 3] if content_key else b for i, b in enumerate(payload[4:])
+    )
     info = {
         "kind": {
             0: "scan",
@@ -382,22 +454,38 @@ def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
         "address_high": header[0] & 0x0F,
         "sequence": header[1],
         "safe_key": header[2],
-        "checksum_ok": (sum(header[:3]) + sum(content)) & 0xFF == header[3],
+        "key": key_name,
+        # None for binds: they can't be checked without the light's device key
+        "checksum_ok": (
+            (sum(header[:3]) + sum(content)) & 0xFF == header[3] if content_key else None
+        ),
         "data": content.hex(),
     }
     if header_type == 1 and len(payload) >= 16:
+        # Discovery: DID, type and device key are sent in the clear
+        device_type = payload[10] | (payload[11] << 8)
         info["discovered_light"] = payload[8:10].hex().upper()
         info["reported_address"] = header[2]
+        info["did"] = payload[4:10].hex().upper()
+        info["device_type"] = device_type
+        info["device_type_name"] = device_type_name(device_type)
+        info["device_key"] = payload[12:16].hex().upper()
     if header_type == 3 and content:
         info["subtype"] = content[0] & 0x0F
         if info["subtype"] == 4:
             info["kind"] = "heartbeat"
     if header_type == 5 and info["checksum_ok"] and len(content) >= 2:
-        # Single control: data[0] = 2 | (len + 1) << 4, data[1] = mesh address
-        length = (content[0] >> 4) - 1
-        info["mesh_address"] = content[1] | (info["address_high"] << 8)
-        info["command"] = content[2 : 2 + max(length, 0)].hex()
         info["control_type"] = content[0] & 0x0F
+        if info["control_type"] == CONTROL_BY_TYPE and len(content) >= 4:
+            # By device type: type (2, little endian), 00, command
+            length = (content[0] >> 4) - 3
+            info["target_device_type"] = content[1] | (content[2] << 8)
+            info["command"] = content[4 : 4 + max(length, 0)].hex()
+        else:
+            # Single control: data[0] = 2 | (len + 1) << 4, data[1] = mesh address
+            length = (content[0] >> 4) - 1
+            info["mesh_address"] = content[1] | (info["address_high"] << 8)
+            info["command"] = content[2 : 2 + max(length, 0)].hex()
     return info
 
 
@@ -453,7 +541,8 @@ def describe_action(info: dict) -> str:
     kind = info.get("kind")
     if kind == "discovery":
         return (
-            f"discovery: {info.get('discovered_light', '?')} announces itself "
+            f"discovery: {info.get('discovered_light', '?')} "
+            f"({info.get('device_type_name', 'unknown type')}) announces itself "
             f"(reports mesh address {info.get('reported_address', '?')})"
         )
     if kind == "heartbeat":
@@ -469,8 +558,13 @@ def describe_action(info: dict) -> str:
     if kind == "control":
         if not info.get("checksum_ok"):
             return "control command (other key, can't decode)"
-        if info.get("control_type") == 2:
+        if info.get("control_type") == CONTROL_SINGLE:
             return describe_command(bytes.fromhex(info.get("command", "")))
+        if info.get("control_type") == CONTROL_BY_TYPE:
+            return (
+                f"all {device_type_name(info.get('target_device_type', 0))} lights: "
+                f"{describe_command(bytes.fromhex(info.get('command', '')))}"
+            )
         if info.get("control_type") == 9:
             return describe_time_sync(bytes.fromhex(info.get("command", "")))
         return f"control type {info.get('control_type')}: {info.get('data')}"

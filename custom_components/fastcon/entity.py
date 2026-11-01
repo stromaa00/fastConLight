@@ -6,7 +6,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
 from .hub import FastconDevice, FastconHub
-from .protocol import LIGHT_TYPE_NAMES
+from .protocol import device_type_name
 
 
 def hub_device_info(hub: FastconHub) -> DeviceInfo:
@@ -20,7 +20,7 @@ def light_device_info(hub: FastconHub, device: FastconDevice) -> DeviceInfo:
         identifiers={(DOMAIN, device.did)},
         name=f"BRMesh {device.name}",
         manufacturer="BRMesh",
-        model=LIGHT_TYPE_NAMES.get(device.device_type, f"Type {device.device_type:04X}"),
+        model=device_type_name(device.device_type),
         serial_number=device.did,
         via_device=(DOMAIN, hub.entry.entry_id),
     )

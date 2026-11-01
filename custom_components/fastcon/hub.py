@@ -55,6 +55,8 @@ from .protocol import (
     describe_action,
     describe_broadcast,
     describe_command,
+    device_type_name,
+    is_light,
     parse_broadcast,
     parse_heartbeat,
     unwrap_rf_frame,
@@ -88,6 +90,16 @@ class FastconDevice:
     mesh_address: int
     # Address chosen for the next bind; the light keeps mesh_address until then
     new_address: int | None = None
+    # A bind to new_address was sent; mesh_address changes once a heartbeat
+    # from new_address confirms the light took it
+    bind_sent: bool = False
+
+    @property
+    def bind_address(self) -> int:
+        """Address a bind gives the light: the new one once Bind was pressed."""
+        if self.bind_sent and self.new_address is not None:
+            return self.new_address
+        return self.mesh_address
 
     @property
     def name(self) -> str:
@@ -144,8 +156,6 @@ class FastconHub:
         self._heartbeat_intervals: dict[str, deque[float]] = {}
         # Monotonic time of the last automatic bind per DID
         self._last_auto_bind: dict[str, float] = {}
-        # Address a device had before the user changed it, to spot failed binds
-        self._previous_address: dict[str, int] = {}
         # Binds the user asked for that the light may not have accepted yet.
         # A light only accepts a bind in discovery mode (after a power cycle),
         # so these are sent again as soon as the light announces itself.
@@ -279,7 +289,7 @@ class FastconHub:
             self._last_auto_bind[device.did] = now
             _LOGGER.info(
                 "BRMesh %s is in discovery mode; sending its pending bind to mesh address %d",
-                device.name, device.mesh_address,
+                device.name, device.bind_address,
             )
             self.async_bind(device, pending=False)
             return
@@ -420,33 +430,25 @@ class FastconHub:
 
     @callback
     def _async_on_heartbeat(self, address: str, beat: Heartbeat) -> None:
+        self._async_confirm_binds(beat.mesh_address)
         # Heartbeats carry no DID, so lights sharing a mesh address all count it
         devices = [d for d in self.devices.values() if d.mesh_address == beat.mesh_address]
         if not devices:
-            if stale := next(
-                (
-                    d
-                    for did, old in self._previous_address.items()
-                    if old == beat.mesh_address and (d := self.devices.get(did))
-                ),
-                None,
-            ):
-                _LOGGER.warning(
-                    "BRMesh %s still reports its old mesh address %d instead of %d; "
-                    "switch the light off and on so it accepts the pending bind",
-                    stale.name, beat.mesh_address, stale.mesh_address,
-                )
-            else:
-                _LOGGER.debug(
-                    "Heartbeat from %s for unknown mesh address %d",
-                    address, beat.mesh_address,
-                )
+            _LOGGER.debug(
+                "Heartbeat from %s for unknown mesh address %d", address, beat.mesh_address
+            )
             return
         now = time.monotonic()
         changed = False
         for device in devices:
-            self._previous_address.pop(device.did, None)
-            self._pending_bind.discard(device.did)
+            if device.bind_sent:
+                # Still on its old address: the bind to the new one isn't taken yet
+                _LOGGER.debug(
+                    "BRMesh %s still reports mesh address %d, bind to %s not confirmed yet",
+                    device.name, beat.mesh_address, device.new_address,
+                )
+            else:
+                self._pending_bind.discard(device.did)
             if (last := self._last_heartbeat.get(device.did)) is not None and (
                 now - last >= HEARTBEAT_BURST_GAP
             ):
@@ -465,6 +467,30 @@ class FastconHub:
                 changed = True
         if changed:
             self._async_availability_changed()
+
+    @callback
+    def _async_confirm_binds(self, mesh_address: int) -> None:
+        """Adopt a new mesh address once a heartbeat from it shows the bind worked.
+
+        Heartbeats carry no DID, so a heartbeat from the new address confirms
+        every light with a bind sent to it.
+        """
+        changed = False
+        for device in self.devices.values():
+            if not device.bind_sent or device.new_address != mesh_address:
+                continue
+            _LOGGER.info(
+                "BRMesh %s confirmed mesh address %d (was %d)",
+                device.name, mesh_address, device.mesh_address,
+            )
+            device.mesh_address = mesh_address
+            device.new_address = None
+            device.bind_sent = False
+            self._pending_bind.discard(device.did)
+            changed = True
+        if changed:
+            self._async_save()
+            async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
 
     @callback
     def _async_check_availability(self, _now=None) -> None:
@@ -562,7 +588,6 @@ class FastconHub:
             self._heartbeat_intervals.pop(did, None)
             self._last_auto_bind.pop(did, None)
             self._pending_bind.discard(did)
-            self._previous_address.pop(did, None)
             self._unavailable.discard(did)
             self._async_save()
 
@@ -606,17 +631,17 @@ class FastconHub:
             _LOGGER.info(
                 "Bind for BRMesh %s (mesh address %d) sent; if the light doesn't take "
                 "it, switch the light off and on and it is bound when it announces itself",
-                device.name, device.mesh_address,
+                device.name, device.bind_address,
             )
         self._queue(
             f"bind:{device.did}",
             lambda: self._builder.bind(
                 bytes.fromhex(device.did),
-                device.mesh_address,
+                device.bind_address,
                 self.phone_key,
                 bytes.fromhex(device.key),
             ),
-            lambda: f"bind to mesh address {device.mesh_address}",
+            lambda: f"bind to mesh address {device.bind_address}",
             device,
         )
 
@@ -632,20 +657,25 @@ class FastconHub:
         new_address = None if address == device.mesh_address else address
         if new_address != device.new_address:
             device.new_address = new_address
+            # A bind sent for another address no longer counts; press Bind again
+            device.bind_sent = False
             self._async_save()
             async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
 
     @callback
     def async_bind_new_address(self, device: FastconDevice) -> None:
-        """Bind the light, moving it to its new mesh address if one was chosen."""
-        if device.new_address is not None:
+        """Bind the light, to its new mesh address if one was chosen.
+
+        The light keeps its current address (commands still go there) until a
+        heartbeat from the new address confirms the bind.
+        """
+        if device.new_address is not None and not device.bind_sent:
             _LOGGER.info(
-                "BRMesh %s: mesh address %d -> %d",
-                device.name, device.mesh_address, device.new_address,
+                "BRMesh %s: binding to mesh address %d (now %d); adopted once its "
+                "heartbeat comes from the new address",
+                device.name, device.new_address, device.mesh_address,
             )
-            self._previous_address[device.did] = device.mesh_address
-            device.mesh_address = device.new_address
-            device.new_address = None
+            device.bind_sent = True
             self._async_save()
             async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
         self.async_bind(device)
@@ -670,15 +700,27 @@ class FastconHub:
     def async_send_all(self, command: bytes) -> None:
         """Queue a light command for every light in the mesh at once.
 
-        Unsent commands for single lights are dropped, as this one overrides them.
+        Like the BRMesh app: one command per device type in the mesh (control
+        type 3); with no known lights, one to mesh address 0. Unsent commands
+        for single lights are dropped, as these override them.
         """
         for key in [key for key in self._pending if key.startswith("light:")]:
             del self._pending[key]
-        self._queue(
-            "light:all",
-            lambda: self._builder.light(ALL_LIGHTS_ADDRESS, self.phone_key, command),
-            lambda: f"all lights: {describe_command(command)}",
-        )
+        types = sorted({d.device_type for d in self.devices.values() if is_light(d.device_type)})
+        if not types:
+            self._queue(
+                "light:all",
+                lambda: self._builder.light(ALL_LIGHTS_ADDRESS, self.phone_key, command),
+                lambda: f"all lights: {describe_command(command)}",
+            )
+        for device_type in types:
+            self._queue(
+                f"light:all:{device_type}",
+                lambda t=device_type: self._builder.light_by_type(t, self.phone_key, command),
+                lambda t=device_type: (
+                    f"all {device_type_name(t)} lights: {describe_command(command)}"
+                ),
+            )
 
     def _queue(
         self,

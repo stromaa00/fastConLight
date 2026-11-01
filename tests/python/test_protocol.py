@@ -78,6 +78,52 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(body[5], 0)
         self.assertEqual(body[6], 0)
 
+    def test_describe_discovery_names_device_type(self):
+        key = protocol.DEFAULT_ENCRYPT_KEY
+        header = bytes(b ^ key[i] for i, b in enumerate((0x10, 0x01, 0x00, 0x00)))
+        payload = header + bytes.fromhex("EC0BF10A52F2") + (43733).to_bytes(2, "little") + bytes(4)
+        info = protocol.describe_broadcast(payload, bytes.fromhex("A1A2A3A4"))
+        self.assertEqual(info["device_type"], 43733)
+        self.assertEqual(info["device_type_name"], "Panel 8")
+        self.assertEqual(info["did"], "EC0BF10A52F2")
+        self.assertIn("Panel 8", protocol.describe_action(info))
+        self.assertEqual(protocol.device_type_name(0x1234), "unknown type 0x1234")
+
+    def test_checksum_uses_the_key_of_each_frame_type(self):
+        phone_key = bytes.fromhex("A1A2A3A4")
+        # Discovery broadcasts are plain (real light), scans use the default key
+        discovery = protocol.describe_broadcast(
+            bytes.fromhex("4e6c7625ec0bf10a7edea1a85e367bc4"), phone_key
+        )
+        self.assertEqual(discovery["key"], "not encrypted")
+        self.assertTrue(discovery["checksum_ok"])
+        scan = protocol.describe_broadcast(protocol.CommandBuilder(5).scan(), phone_key)
+        self.assertEqual(scan["kind"], "scan")
+        self.assertTrue(scan["checksum_ok"])
+        bind = protocol.CommandBuilder(5).bind(
+            bytes.fromhex("EC0BF10A52F2"), 3, phone_key, bytes.fromhex("5E367BC4")
+        )
+        self.assertIsNone(protocol.describe_broadcast(bind, phone_key)["checksum_ok"])
+
+    def test_brightness_command_has_no_on_bit_and_minimum_five(self):
+        self.assertEqual(protocol.light_brightness(64), bytes((64,)))
+        self.assertEqual(protocol.light_brightness(0), bytes((5,)))
+        self.assertEqual(protocol.light_brightness(200), bytes((127,)))
+        self.assertEqual(protocol.describe_command(protocol.light_brightness(64)), "brightness 50%")
+
+    def test_light_by_type_matches_the_app(self):
+        # The BRMesh app's "all on" / "all off" decrypt to 43 2a a8 00 80 / 00
+        # (captured from a private mesh, so checked decrypted, not as raw frames)
+        key = bytes.fromhex("A1A2A3A4")
+        on = protocol.CommandBuilder(174).light_by_type(43050, key, bytes((0x80,)))
+        off = protocol.CommandBuilder(176).light_by_type(43050, key, protocol.light_off())
+        self.assertTrue(protocol.describe_broadcast(on, key)["data"].startswith("432aa80080"))
+        self.assertTrue(protocol.describe_broadcast(off, key)["data"].startswith("432aa80000"))
+        info = protocol.describe_broadcast(off, key)
+        self.assertTrue(info["checksum_ok"])
+        self.assertEqual(info["target_device_type"], 43050)
+        self.assertEqual(protocol.describe_action(info), "all Light RGBCW lights: light off")
+
     def test_bind_command_round_trip(self):
         phone_key = bytes.fromhex("A1A2A3A4")
         device_key = bytes.fromhex("5E367BC4")
@@ -226,7 +272,7 @@ class ProtocolTest(unittest.TestCase):
         )
         self.assertEqual(
             action("4e6c7625ec0bf10a7edea1a85e367bc4"),
-            "discovery: 7EDE announces itself (reports mesh address 13)",
+            "discovery: 7EDE (Light RGBW) announces itself (reports mesh address 13)",
         )
         self.assertEqual(
             action("6e587fb4d5a6a3a0a597a9aba1a2a3a4", header_mesh=4),

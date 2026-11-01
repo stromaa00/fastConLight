@@ -39,7 +39,11 @@ async def async_setup_entry(
 
 
 class FastconBoundAddress(SensorEntity):
-    """Mesh address commands go to; changed only by Mesh address plus Bind."""
+    """Mesh address commands go to.
+
+    Changes only through Mesh address plus Bind, once a heartbeat from the
+    new address confirms the light took it.
+    """
 
     _attr_has_entity_name = True
     _attr_translation_key = "bound_mesh_address"
@@ -59,9 +63,12 @@ class FastconBoundAddress(SensorEntity):
         return self._device.mesh_address
 
     @property
-    def extra_state_attributes(self) -> dict[str, int | None]:
-        """The address the next bind will give it, if one is chosen."""
-        return {"pending_address": self._device.new_address}
+    def extra_state_attributes(self) -> dict[str, int | bool | None]:
+        """A chosen new address, and whether its bind awaits a heartbeat."""
+        return {
+            "pending_address": self._device.new_address,
+            "waiting_for_heartbeat": self._device.bind_sent,
+        }
 
     async def async_added_to_hass(self) -> None:
         """Follow address changes."""
