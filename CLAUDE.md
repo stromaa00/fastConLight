@@ -10,6 +10,7 @@ Control of BRMesh / Fastcon Bluetooth LE lights from Home Assistant. The repo ho
 |------|------|--------|
 | `custom_components/fastcon/` | Home Assistant integration (HACS) using the HA host's Bluetooth adapter | Main focus of current work |
 | `components/brmesh_tx/` + `brmesh-transmitter.yaml` | ESPHome component that rebroadcasts the integration's packets from an ESP32 (range extension) | Active |
+| `tools/brmesh_debug.py` + `brmesh_web.py/.html` | CLI/shell and aiohttp web frontend that drive a `brmesh_tx` ESP32 over the ESPHome API (aioesphomeapi) for testing; loads `protocol.py` by file path | Active |
 | `components/fastcon/` + `fastcon-*.yaml` | Standalone ESPHome firmware (lights defined in YAML) | Maintained |
 | `src/` + `platformio.ini` | Original Arduino/PlatformIO firmware with MQTT | Legacy, kept as protocol reference |
 

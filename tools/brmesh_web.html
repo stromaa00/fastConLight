@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BRMesh Debug</title>
+<style>
+  :root {
+    --bg: #111418; --panel: #1a1f25; --line: #2a313a; --text: #d8dee6; --muted: #8a96a3;
+    --accent: #4ea1ff; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+    --send: #4ea1ff; --recv: #d8dee6; --found: #3fb950; --beat: #8a96a3; --esp: #b392f0; --info: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); }
+  .dot.on { background: var(--ok); }
+  #status { color: var(--muted); }
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 12px; padding: 12px; height: calc(100vh - 47px); }
+  .col { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; min-height: 0; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 6px 0 2px; }
+  input, select, button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  input[type=text], input[type=password], input[type=number], select { width: 100%; }
+  input[type=color] { padding: 2px; width: 44px; height: 32px; }
+  input[type=range] { width: 100%; padding: 0; }
+  button { cursor: pointer; background: #222a33; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .4; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > * { flex: 1; }
+  .row > .fixed { flex: 0 0 auto; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .check { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; margin: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px; border-bottom: 1px solid var(--line); }
+  td { padding: 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  td code { font-size: 12px; }
+  td input[type=number] { width: 64px; padding: 3px 5px; }
+  td button { padding: 3px 8px; }
+  .empty { color: var(--muted); font-size: 13px; }
+  .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; }
+  .info-grid span:nth-child(odd) { color: var(--muted); }
+  #log-section { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  #log { flex: 1; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px;
+         font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; min-height: 200px; }
+  #log div { padding: 1px 0; }
+  .k-send { color: var(--send); } .k-recv { color: var(--recv); } .k-found { color: var(--found); font-weight: 600; }
+  .k-beat { color: var(--beat); } .k-esp { color: var(--esp); } .k-info { color: var(--info); }
+  .k-error { color: var(--err); } .k-cmd { color: var(--muted); }
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  #cmdline { font-family: ui-monospace, Consolas, monospace; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="dot"></div>
+  <h1>BRMesh Debug</h1>
+  <span id="status">not connected</span>
+</header>
+<main>
+  <div class="col">
+    <section>
+      <h2>ESP32 transmitter</h2>
+      <div class="grid2">
+        <div><label>Host / IP</label><input type="text" id="host" placeholder="192.168.1.50"></div>
+        <div><label>Port</label><input type="number" id="port" value="6053"></div>
+      </div>
+      <label>API encryption key</label><input type="password" id="key" placeholder="base64 key from secrets.yaml">
+      <label>Phone key (mesh)</label><input type="text" id="phone_key" value="A1A2A3A4" maxlength="8">
+      <div class="grid2">
+        <div><label>Broadcast time per command (ms)</label><input type="number" id="duration" value="1000" step="100" min="100"></div>
+        <div><label>Time between packets (ms)</label><input type="number" id="interval" step="10" min="20" max="10240" placeholder="firmware"></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="connect">Connect</button>
+        <button id="disconnect" disabled>Disconnect</button>
+      </div>
+      <div id="device" class="info-grid" style="margin-top:10px"></div>
+    </section>
+
+    <section>
+      <h2>Light control</h2>
+      <label>Target</label>
+      <div class="row">
+        <select id="target"><option value="all">All lights (address 0)</option></select>
+        <input type="number" id="target-manual" class="fixed" style="width:80px" min="1" max="255" placeholder="addr">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button data-needs-conn id="on">On</button>
+        <button data-needs-conn id="off">Off</button>
+        <button data-needs-conn id="white">White</button>
+      </div>
+      <label>Brightness <span id="bri-val">100</span>%</label>
+      <input type="range" id="brightness" min="1" max="100" value="100">
+      <label>Color</label>
+      <div class="row">
+        <input type="color" id="color" value="#ff0000" class="fixed">
+        <button data-needs-conn id="rgb">Send color</button>
+      </div>
+      <label class="check" style="margin-top:8px"><input type="checkbox" id="live"> send brightness while dragging</label>
+    </section>
+
+    <section>
+      <h2>Mesh</h2>
+      <div class="row">
+        <button data-needs-conn class="primary" id="scan">Scan</button>
+        <label class="check fixed"><input type="checkbox" id="relay"> relay through lights</label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button data-needs-conn id="apply">Apply phone key, broadcast time &amp; interval</button>
+      </div>
+      <label>Raw payload (24 bytes hex)</label>
+      <div class="row">
+        <input type="text" id="raw" placeholder="48 hex chars">
+        <button data-needs-conn class="fixed" id="send-raw">Send</button>
+      </div>
+      <div class="hint">Power cycle a light to put it in discovery mode, then scan.</div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section>
+      <h2>Discovered lights</h2>
+      <div id="discovered"><div class="empty">None yet. Power cycle a light and press Scan.</div></div>
+    </section>
+    <section>
+      <h2>Heartbeats (bound lights, current phone key)</h2>
+      <div id="heartbeats"><div class="empty">None received.</div></div>
+    </section>
+    <section id="log-section">
+      <h2>Log</h2>
+      <div class="filters">
+        <label class="check"><input type="checkbox" data-kind="send" checked> sent</label>
+        <label class="check"><input type="checkbox" data-kind="recv" checked> received</label>
+        <label class="check"><input type="checkbox" data-kind="found" checked> discovery</label>
+        <label class="check"><input type="checkbox" data-kind="beat" checked> heartbeats</label>
+        <label class="check"><input type="checkbox" data-kind="esp" checked> ESP32 log</label>
+        <label class="check"><input type="checkbox" id="show-all"> all broadcasts</label>
+        <label class="check"><input type="checkbox" id="autoscroll" checked> autoscroll</label>
+        <button id="clear" style="padding:2px 8px">Clear</button>
+      </div>
+      <div id="log"></div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="cmdline" placeholder="shell command, e.g. on 5 50 · bind found 3 · help">
+        <button class="fixed" id="run">Run</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const hidden = new Set();
+// Addresses typed into the discovered-lights table, kept across re-renders
+const addrInput = {};
+let state = { connected: false };
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  return res.json();
+}
+const run = (line) => api("/api/command", { line }).then(refresh);
+
+function addLog(kind, text) {
+  const div = document.createElement("div");
+  div.className = "k-" + kind;
+  div.dataset.kind = kind;
+  div.textContent = text;
+  if (hidden.has(kind)) div.style.display = "none";
+  const log = $("log");
+  log.appendChild(div);
+  while (log.childElementCount > 3000) log.firstChild.remove();
+  if ($("autoscroll").checked) log.scrollTop = log.scrollHeight;
+}
+
+function connectSocket() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    addLog(ev.kind, ev.text);
+    if (ev.kind === "found" || ev.kind === "info" || ev.kind === "error") refresh();
+  };
+  ws.onclose = () => setTimeout(connectSocket, 2000);
+}
+
+function target() {
+  const manual = $("target-manual").value.trim();
+  return manual || $("target").value;
+}
+const percent = () => $("brightness").value;
+
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function render() {
+  const c = state.connected;
+  $("dot").classList.toggle("on", c);
+  $("status").textContent = c ? `${state.device.name} · ${state.device.action || "no send_brmesh action!"}` : "not connected";
+  $("connect").disabled = c;
+  $("disconnect").disabled = !c;
+  document.querySelectorAll("[data-needs-conn]").forEach((b) => (b.disabled = !c));
+  $("device").innerHTML = c ? `
+    <span>Device</span><span>${esc(state.device.name)} (${esc(state.device.model)})</span>
+    <span>ESPHome</span><span>${esc(state.device.esphome)}</span>
+    <span>MAC</span><span>${esc(state.device.mac)}</span>
+    <span>Action</span><span>${esc(state.device.action || "missing")}</span>
+    <span>Phone key</span><span>${esc(state.phone_key)}</span>
+    <span>Timing</span><span>${state.duration} ms per command, packets every ${state.interval ? state.interval + " ms" : "(firmware setting)"}</span>
+    ${state.interval_supported ? "" : `<span>Interval</span><span style="color:var(--warn)">not adjustable: add set_brmesh_interval to the ESP32 YAML</span>`}` : "";
+  if (c) $("show-all").checked = state.show_all;
+
+  const disc = state.discovered || [];
+  $("discovered").innerHTML = disc.length ? `<table>
+    <tr><th>Name</th><th>DID</th><th>Type</th><th>Key</th><th>Addr</th><th>Address</th><th></th></tr>
+    ${disc.map((d, i) => `<tr>
+      <td><b>${esc(d.name)}</b></td><td><code>${esc(d.did)}</code></td><td>${esc(d.type)}</td>
+      <td><code>${esc(d.key)}</code></td><td>${d.address || "–"}</td>
+      <td><input type="number" min="1" max="255" id="bind-${i}" data-addr-for="${esc(d.did)}"
+        value="${addrInput[d.did] ?? (d.address || "")}" title="Mesh address to bind to and to switch"></td>
+      <td class="row" style="flex-wrap:nowrap">
+        <button data-bind="${i}">Bind</button>
+        <button data-light-on="${i}" title="Turn on at the address in the field">On</button>
+        <button data-light-off="${i}" title="Turn off at the address in the field">Off</button>
+        <button data-copy="${esc(d.identity)}" title="Copy NAME-DID-TYPE-KEY for 'Add a light manually'">Copy ID</button>
+      </td></tr>`).join("")}</table>`
+    : `<div class="empty">None yet. Power cycle a light and press Scan.</div>`;
+
+  const beats = state.heartbeats || [];
+  $("heartbeats").innerHTML = beats.length ? `<table>
+    <tr><th>Address</th><th>Group</th><th>RSSI</th><th>Last</th><th></th></tr>
+    ${beats.map((b) => `<tr><td><b>${b.address}</b></td><td>${b.group}</td><td>${b.rssi} dBm</td>
+      <td>${esc(b.time)}</td><td><button data-select="${b.address}">Select</button></td></tr>`).join("")}</table>`
+    : `<div class="empty">None received.</div>`;
+
+  // Target options: all + addresses known from discovery and heartbeats
+  const addrs = new Set([...disc.map((d) => d.address).filter(Boolean), ...beats.map((b) => b.address)]);
+  const sel = $("target"), current = sel.value;
+  sel.innerHTML = `<option value="all">All lights (address 0)</option>` +
+    [...addrs].sort((a, b) => a - b).map((a) => `<option value="${a}">Address ${a}</option>`).join("");
+  sel.value = [...sel.options].some((o) => o.value === current) ? current : "all";
+}
+
+async function refresh() {
+  state = await api("/api/state");
+  render();
+}
+
+$("connect").onclick = async () => {
+  $("connect").disabled = true;
+  await api("/api/connect", {
+    host: $("host").value, port: $("port").value, key: $("key").value,
+    phone_key: $("phone_key").value, duration: $("duration").value, interval: $("interval").value,
+  });
+  refresh();
+};
+$("disconnect").onclick = () => api("/api/disconnect", {}).then(refresh);
+$("on").onclick = () => run(`on ${target()} ${percent()}`);
+$("off").onclick = () => run(`off ${target()}`);
+$("white").onclick = () => run(`white ${target()} ${percent()}`);
+$("rgb").onclick = () => {
+  const hex = $("color").value;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  run(`rgb ${target()} ${r} ${g} ${b} ${percent()}`);
+};
+let briTimer;
+$("brightness").oninput = () => {
+  $("bri-val").textContent = percent();
+  if (!$("live").checked || !state.connected) return;
+  clearTimeout(briTimer);
+  briTimer = setTimeout(() => run(`brightness ${target()} ${percent()}`), 150);
+};
+$("brightness").onchange = () => { if (state.connected && !$("live").checked) run(`brightness ${target()} ${percent()}`); };
+$("scan").onclick = () => run($("relay").checked ? "scan relay" : "scan");
+$("apply").onclick = async () => {
+  await run(`key ${$("phone_key").value}`);
+  await run(`duration ${$("duration").value}`);
+  if ($("interval").value) await run(`interval ${$("interval").value}`);
+};
+$("send-raw").onclick = () => run(`raw ${$("raw").value.replace(/\s/g, "")}`);
+$("show-all").onchange = (e) => run(`all ${e.target.checked ? "on" : "off"}`);
+$("clear").onclick = () => ($("log").innerHTML = "");
+$("run").onclick = () => { const l = $("cmdline").value.trim(); if (l) { run(l); $("cmdline").value = ""; } };
+$("cmdline").onkeydown = (e) => { if (e.key === "Enter") $("run").click(); };
+
+document.querySelectorAll("[data-kind]").forEach((cb) => (cb.onchange = () => {
+  const kind = cb.dataset.kind;
+  cb.checked ? hidden.delete(kind) : hidden.add(kind);
+  document.querySelectorAll(`#log [data-kind="${kind}"]`).forEach((d) => (d.style.display = cb.checked ? "" : "none"));
+}));
+
+document.addEventListener("input", (e) => {
+  if (e.target.dataset.addrFor !== undefined) addrInput[e.target.dataset.addrFor] = e.target.value;
+});
+
+function rowAddress(i, what) {
+  const addr = $(`bind-${i}`).value;
+  if (!addr || addr === "0") addLog("error", `Enter a mesh address (1-255) to ${what}.`);
+  return addr && addr !== "0" ? addr : null;
+}
+
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  if (t.dataset.bind !== undefined) {
+    const d = state.discovered[+t.dataset.bind];
+    const addr = rowAddress(t.dataset.bind, "bind to");
+    if (addr) run(`bind ${d.did} ${d.key} ${addr}`);
+  } else if (t.dataset.lightOn !== undefined) {
+    const addr = rowAddress(t.dataset.lightOn, "switch");
+    if (addr) run(`on ${addr} ${percent()}`);
+  } else if (t.dataset.lightOff !== undefined) {
+    const addr = rowAddress(t.dataset.lightOff, "switch");
+    if (addr) run(`off ${addr}`);
+  } else if (t.dataset.copy !== undefined) {
+    navigator.clipboard.writeText(t.dataset.copy);
+    addLog("info", `Copied ${t.dataset.copy}`);
+  } else if (t.dataset.select !== undefined) {
+    $("target-manual").value = "";
+    $("target").value = t.dataset.select;
+  }
+});
+
+(async () => {
+  const d = await api("/api/defaults");
+  if (d.host) $("host").value = d.host;
+  if (d.key) $("key").value = d.key;
+  if (d.phone_key) $("phone_key").value = d.phone_key;
+  connectSocket();
+  await refresh();
+  setInterval(() => state.connected && refresh(), 3000);
+})();
+</script>
+</body>
+</html>

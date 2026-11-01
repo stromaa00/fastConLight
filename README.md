@@ -34,6 +34,8 @@ Uses the Bluetooth adapter of the Home Assistant host, so no ESP32 is needed. Co
 3. **Settings → Devices & Services → Add Integration → BRMesh / Fastcon**, pick the adapter and enter the phone key (default `A1A2A3A4`)
 4. Press **Scan for devices**, then **Bind all devices**. Or turn on **Auto-bind discovered lights** to have every light found by a scan bound automatically.
 
+**Mesh addresses:** on a light's device page, set **Mesh address** and press **Bind**; nothing is sent before that. **Bound mesh address** shows the address in use. Several lights may get the same address, then they switch together.
+
 Lights already set up in ESPHome can be added under the integration's **Configure → Add a light manually**.
 
 **All lights at once:** every mesh has an **All lights** entity that switches all its lights with a single command, which is much faster than a group of single lights. Experimental: if your lights don't react to it, please open an issue.
@@ -43,6 +45,30 @@ Lights already set up in ESPHome can be added under the integration's **Configur
 **Replacing the BRMesh app:** enter the app's mesh key as the phone key (**Configure → Settings**), press **Scan for devices**, and stop using the app. New lights keep their app address if it's free; turn on **Auto-bind discovered lights** if Home Assistant should bind them itself. Details: [SPECIFICATION.md §7.3](SPECIFICATION.md).
 
 **Several meshes:** each phone key is its own mesh. Add another one with **Settings → Devices & Services → BRMesh / Fastcon → Add entry** and give it a name and its phone key; it can use the same adapter. Newly discovered lights go to the mesh where you last pressed **Scan for devices** (for 2 minutes after the scan); otherwise to the mesh whose **Auto-bind discovered lights** is on, or to the first mesh. A light that already went to the wrong mesh: delete it there, power cycle it and scan again in the right mesh.
+
+### Debugging with an ESP32 transmitter
+
+[tools/brmesh_debug.py](tools/brmesh_debug.py) talks to an ESP32 running `brmesh-transmitter.yaml` directly, without Home Assistant: scan, bind, switch lights (also all at once) and watch the decoded BRMesh broadcasts and the ESP32 log.
+
+```bash
+pip install aioesphomeapi
+python tools/brmesh_debug.py --host 192.168.1.50 --key <api encryption key> --phone-key A1A2A3A4
+brmesh> scan
+brmesh> bind found 5
+brmesh> on 5 50
+brmesh> off all
+```
+
+For a browser UI with the same functions (connection form, light control, discovered lights with Bind buttons, heartbeats, filterable live log):
+
+```bash
+pip install aioesphomeapi aiohttp
+python tools/brmesh_web.py        # http://127.0.0.1:8099
+```
+
+Broadcast time per command and time between packets are adjustable in both; the packet interval needs the `set_brmesh_interval` action from [brmesh-transmitter.yaml](brmesh-transmitter.yaml) on the ESP32.
+
+`--help` lists the one-shot commands (`info`, `scan`, `sniff`, `on`, …); `help` in the shell lists the shell commands. While the tool is connected, Home Assistant gets no Bluetooth advertisements from that ESP32 (ESPHome passes them to one client only) until it reconnects.
 
 ---
 
