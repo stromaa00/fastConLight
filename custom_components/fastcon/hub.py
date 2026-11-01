@@ -167,6 +167,9 @@ class FastconHub:
         self.auto_bind = False
         # Group id -> name; members are the devices whose group is that id
         self.groups: dict[int, str] = {}
+        # Area chosen for a new group whose entity doesn't exist yet; the
+        # entity applies it when added. Afterwards the entity registry holds it.
+        self.pending_group_areas: dict[int, str | None] = {}
         # Monotonic time of this mesh's last scan, to adopt the lights it finds
         self.last_scan: float | None = None
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)

@@ -74,10 +74,12 @@
           "name": "Name",
           "group_id": "Group id",
           "lights": "Lights",
-          "delete": "Delete this group"
+          "delete": "Delete this group",
+          "area": "Area"
         },
         "data_description": {
-          "group_id": "1-255. Use the id of a group made in the BRMesh app to take it over (Flur is usually 1)."
+          "group_id": "1-255. Use the id of a group made in the BRMesh app to take it over (Flur is usually 1).",
+          "area": "Puts the group's light entity into this area, so controlling the area switches the whole group with one command per light type. Keep the group's lights themselves out of this area, or the area also switches them one by one."
         }
       }
     },
@@ -88,7 +90,8 @@
       "invalid_device_id": "Must be exactly 12 hex characters.",
       "invalid_device_type": "Must be exactly 4 hex characters, e.g. A8A1.",
       "name_required": "Enter a name.",
-      "group_id_in_use": "Another group already uses this id."
+      "group_id_in_use": "Another group already uses this id.",
+      "lights_in_area": "These lights are in this area too: {lights}. Controlling the area would then also switch them one by one (slower). Save again to keep it anyway."
     },
     "abort": {
       "not_loaded": "The integration must be loaded to add lights."

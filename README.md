@@ -38,7 +38,7 @@ Uses the Bluetooth adapter of the Home Assistant host, so no ESP32 is needed. Co
 
 Lights already set up in ESPHome can be added under the integration's **Configure → Add a light manually**.
 
-**Groups:** under **Configure → Groups** create a group, give it a name and pick its lights; saving sends the memberships to the lights. Each group becomes a light entity that switches all its lights with one command per light type, like the BRMesh app. A light is in at most one group. To take over a group from the app, use its id (the app's first group is usually 1).
+**Groups:** under **Configure → Groups** create a group, give it a name and pick its lights; saving sends the memberships to the lights. Each group becomes a light entity that switches all its lights with one command per light type, like the BRMesh app. Pick an **Area** to control the group through it ("turn on the hallway lights"); keep the group's lights themselves out of that area, or the area also switches them one by one. A light is in at most one group. To take over a group from the app, use its id (the app's first group is usually 1).
 
 **All lights at once:** every mesh has an **All lights** entity that switches all its lights with a single command, which is much faster than a group of single lights. Experimental: if your lights don't react to it, please open an issue.
 

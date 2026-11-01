@@ -267,6 +267,9 @@ class FastconGroupLight(_FastconLightBase):
     async def async_added_to_hass(self) -> None:
         """Follow renames and remove itself when the group is deleted."""
         await super().async_added_to_hass()
+        # Area picked in the options before this entity existed
+        if (area := self._hub.pending_group_areas.pop(self._group_id, None)) is not None:
+            er.async_get(self.hass).async_update_entity(self.entity_id, area_id=area)
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass, signal_groups_changed(self._hub.entry.entry_id), self._async_groups_changed

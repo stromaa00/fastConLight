@@ -18,7 +18,11 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import selector
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    selector,
+)
 
 from .advertiser import async_list_adapters
 from .const import (
@@ -48,6 +52,7 @@ CONF_GROUP = "group"
 CONF_GROUP_ID = "group_id"
 CONF_LIGHTS = "lights"
 CONF_DELETE = "delete"
+CONF_AREA = "area"
 NEW_GROUP = "new"
 
 _LOGGER = logging.getLogger(__name__)
@@ -187,6 +192,7 @@ class FastconOptionsFlow(OptionsFlow):
         hub = self.config_entry.runtime_data
         group_id = getattr(self, "_group_id", None)
         errors: dict[str, str] = {}
+        placeholders = {"group_id": str(group_id or ""), "lights": ""}
         if user_input is not None:
             if group_id is not None and user_input.get(CONF_DELETE):
                 hub.async_delete_group(group_id)
@@ -198,8 +204,18 @@ class FastconOptionsFlow(OptionsFlow):
             elif group_id is None and new_id in hub.groups:
                 errors[CONF_GROUP_ID] = "group_id_in_use"
             else:
-                hub.async_save_group(new_id, name, user_input.get(CONF_LIGHTS, []))
-                return self.async_create_entry(data=dict(self.config_entry.options))
+                area = user_input.get(CONF_AREA) or None
+                selected = user_input.get(CONF_LIGHTS, [])
+                in_area = self._lights_in_area(area, selected)
+                # Warn once: area control would switch these lights one by one too
+                if in_area and getattr(self, "_area_warned", None) != (area, tuple(selected)):
+                    self._area_warned = (area, tuple(selected))
+                    errors[CONF_AREA] = "lights_in_area"
+                    placeholders["lights"] = ", ".join(in_area)
+                else:
+                    hub.async_save_group(new_id, name, selected)
+                    self._async_set_group_area(new_id, area)
+                    return self.async_create_entry(data=dict(self.config_entry.options))
 
         lights = sorted(
             (d for d in hub.devices.values() if is_light(d.device_type)),
@@ -238,14 +254,60 @@ class FastconOptionsFlow(OptionsFlow):
                 mode=selector.SelectSelectorMode.LIST,
             )
         )
+        area = (
+            user_input.get(CONF_AREA)
+            if user_input is not None
+            else self._group_area(group_id) if group_id is not None else None
+        )
+        schema[
+            vol.Optional(CONF_AREA, description={"suggested_value": area})
+        ] = selector.AreaSelector()
         if group_id is not None:
             schema[vol.Optional(CONF_DELETE, default=False)] = bool
         return self.async_show_form(
             step_id="group_edit",
             data_schema=vol.Schema(schema),
             errors=errors,
-            description_placeholders={"group_id": str(group_id or "")},
+            description_placeholders=placeholders,
         )
+
+    def _group_entity_id(self, group_id: int) -> str | None:
+        return er.async_get(self.hass).async_get_entity_id(
+            "light", DOMAIN, f"{self.config_entry.entry_id}_group_{group_id}"
+        )
+
+    def _group_area(self, group_id: int) -> str | None:
+        """The group entity's area as set in Home Assistant."""
+        if (entity_id := self._group_entity_id(group_id)) is None:
+            return None
+        entry = er.async_get(self.hass).async_get(entity_id)
+        return entry.area_id if entry else None
+
+    def _async_set_group_area(self, group_id: int, area: str | None) -> None:
+        """Put the group entity into an area (now, or once it is created)."""
+        if (entity_id := self._group_entity_id(group_id)) is not None:
+            er.async_get(self.hass).async_update_entity(entity_id, area_id=area)
+        elif area:
+            self.config_entry.runtime_data.pending_group_areas[group_id] = area
+
+    def _lights_in_area(self, area: str | None, dids: list[str]) -> list[str]:
+        """Selected lights that are in the area themselves (entity or device)."""
+        if not area:
+            return []
+        entities = er.async_get(self.hass)
+        devices = dr.async_get(self.hass)
+        hub = self.config_entry.runtime_data
+        found = []
+        for did in dids:
+            entity_id = entities.async_get_entity_id("light", DOMAIN, did)
+            entity = entities.async_get(entity_id) if entity_id else None
+            device = devices.async_get_device(identifiers={(DOMAIN, did)})
+            light_area = (entity.area_id if entity and entity.area_id else None) or (
+                device.area_id if device else None
+            )
+            if light_area == area and did in hub.devices:
+                found.append(f"BRMesh {hub.devices[did].name}")
+        return found
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None

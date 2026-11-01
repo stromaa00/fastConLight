@@ -355,7 +355,7 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 | `sensor.brmesh_<name>_bound_mesh_address` | Read-only: the mesh address commands go to. Changes only through Mesh address + Bind and a confirming heartbeat from the new address (or auto-bind of a new light). Attributes: `pending_address` (chosen, not yet confirmed) and `waiting_for_heartbeat` (bind sent). Heartbeats carry no DID, so a heartbeat from the new address confirms every light with a bind sent there, including when another light already uses it |
 | `switch.<hub>_auto_bind_discovered_lights` | When on, lights found by a scan are bound automatically (off by default, saved) |
 | `light.brmesh_<name>` | One per light; assumed state, restored after restart |
-| `light.<hub>_<group name>` | One per group from **Configure → Groups**: control type 3 with the group id, one command per light type of its members; attributes `group_id`, `lights`. Members take over its state |
+| `light.<hub>_<group name>` | One per group from **Configure → Groups**: control type 3 with the group id, one command per light type of its members; attributes `group_id`, `lights`. Members take over its state. The group form's **Area** sets this entity's area in the entity registry (applied once the entity exists for new groups) and warns once if selected lights are in the same area |
 
 **Setup**
 
