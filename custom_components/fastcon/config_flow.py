@@ -47,7 +47,7 @@ from .const import (
     TRANSMITTER_ACTION_SUFFIX,
 )
 from .hub import FastconDevice
-from .protocol import EFFECT_COLORS, is_light
+from .protocol import EFFECT_COLORS, device_type_name, is_light
 
 CONF_GROUP_ID = "group_id"
 CONF_LIGHTS = "lights"
@@ -154,7 +154,50 @@ class FastconOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Show the menu."""
         return self.async_show_menu(
-            step_id="init", menu_options=["settings", "groups", "effects", "add_device"]
+            step_id="init",
+            menu_options=["overview", "settings", "groups", "effects", "add_device"],
+        )
+
+    async def async_step_overview(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Table of all lights with their mesh address and group."""
+        if self.config_entry.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="not_loaded")
+        if user_input is not None:
+            return self.async_create_entry(data=dict(self.config_entry.options))
+        hub = self.config_entry.runtime_data
+        registry = dr.async_get(self.hass)
+        rows = []
+        for device in sorted(
+            hub.devices.values(), key=lambda d: (d.mesh_address, d.group, d.did)
+        ):
+            entry = registry.async_get_device(identifiers={(DOMAIN, device.did)})
+            name = (entry and (entry.name_by_user or entry.name)) or f"BRMesh {device.name}"
+            address = str(device.mesh_address)
+            if device.new_address is not None and device.new_address != device.mesh_address:
+                address += f" → {device.new_address}" + (
+                    " (waiting for heartbeat)" if device.bind_sent else " (not bound)"
+                )
+            group = (
+                f"{hub.groups.get(device.group, '?')} ({device.group})"
+                if device.group
+                else "–"
+            )
+            rows.append(
+                f"| {name} | {address} | {group} | "
+                f"{device_type_name(device.device_type)} | {device.did} |"
+            )
+        table = (
+            "| Light | Mesh address | Group | Type | DID |\n|---|---|---|---|---|\n"
+            + "\n".join(rows)
+            if rows
+            else "No lights yet."
+        )
+        return self.async_show_form(
+            step_id="overview",
+            data_schema=vol.Schema({}),
+            description_placeholders={"table": table, "count": str(len(rows))},
         )
 
     async def async_step_effects(

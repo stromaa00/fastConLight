@@ -38,6 +38,8 @@ Uses the Bluetooth adapter of the Home Assistant host, so no ESP32 is needed. Co
 
 Lights already set up in ESPHome can be added under the integration's **Configure → Add a light manually**.
 
+**Overview:** **Configure → Overview of all lights** lists every light with its mesh address (and a pending new one), group, type and DID.
+
 **Groups:** under **Configure → Groups** create a group, give it a name and pick its lights; saving sends the memberships to the lights. Each group is its own device under the mesh, with its lights listed under it, and has a light entity that switches all its lights with one command per light type, like the BRMesh app. Pick an **Area** to control the group through it ("turn on the hallway lights"); keep the group's lights themselves out of that area, or the area also switches them one by one. A light is in at most one group. To take over a group from the app, use its id (the app's first group is usually 1).
 
 **Effects:** under **Configure → Effects** build colour effects (name, fade or jump, speed, up to 9 colours from red, green, blue, yellow, magenta, cyan, white, off). They appear in the effect list of every colour light, group and *All lights*. Choosing a colour or white ends an effect; switching off and on keeps it. Starts with the BRMesh app's 21 built-in effects (Full color fade, Romantic, Fresh, Cozy, the flashes, Christmas, Winter, Halloween, Valentines day); **Add the BRMesh app's built-in effects** adds missing ones to an existing mesh.

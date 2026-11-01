@@ -27,6 +27,7 @@
     "step": {
       "init": {
         "menu_options": {
+          "overview": "Overview of all lights",
           "settings": "Settings",
           "groups": "Groups",
           "effects": "Effects",
@@ -105,6 +106,10 @@
         "data_description": {
           "speed": "1 slow … 100 fast"
         }
+      },
+      "overview": {
+        "title": "Lights ({count})",
+        "description": "Mesh address, group and type of every light, sorted by address. An arrow shows an address set but not yet confirmed by the light.\n\n{table}"
       }
     },
     "error": {
