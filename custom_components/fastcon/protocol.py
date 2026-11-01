@@ -24,6 +24,23 @@ CMD_SINGLE_CONTROL = 5
 CONTROL_GROUP_ASSIGN = 1  # put one light into a group (app: add a light to a group)
 CONTROL_SINGLE = 2  # one mesh address
 CONTROL_BY_TYPE = 3  # lights of one device type in a group (group 0 = all)
+CONTROL_EFFECT = 8  # colour effect on one light: speed, mode, 3-bit colours
+
+# Effect colours: 3 bits, bit 0 blue, bit 1 red, bit 2 green (the app's
+# RgbStatus, in the blue-red-green order of the colour command)
+EFFECT_COLORS = {
+    "off": 0,
+    "blue": 1,
+    "red": 2,
+    "magenta": 3,
+    "green": 4,
+    "cyan": 5,
+    "yellow": 6,
+    "white": 7,
+}
+EFFECT_COLOR_NAMES = {value: name for name, value in EFFECT_COLORS.items()}
+EFFECT_MODE_JUMP = 0  # app: BLESceneInfo.mode 0 (guess: jump between colours)
+EFFECT_MODE_FADE = 1  # app: BLESceneInfo.mode 1 (fade, e.g. "Full color fade")
 
 # Device type codes (see SPECIFICATION.md section 5)
 LIGHT_RGBCW = 43050
@@ -280,6 +297,38 @@ class CommandBuilder:
         data[3] = group & 0xFF
         data[4 : 4 + len(command)] = command
         return self.generate(CMD_SINGLE_CONTROL, bytes(data), phone_key, forward=True)
+
+    def scene(
+        self, mesh_address: int, phone_key: bytes, speed: int, mode: int, colors: list[int]
+    ) -> bytes:
+        """Colour effect on one light, as the BRMesh app sends its scenes.
+
+        Data: [8 | (2 + n) << 4] [mesh address] [speed 1-100]
+        [mode << 6 | colour 1] [colour 2] ... [colour n], colours 3-bit (see
+        EFFECT_COLORS), 1-9 of them. Like the app, a single colour gets "off"
+        added so the light alternates. E.g. "Romantic": fade magenta, red =
+        48 10 <speed> 43 02; "Full color fade": red, magenta, blue, cyan, green,
+        yellow = 88 10 <speed> 42 03 01 05 04 06.
+        """
+        colors = [c & 7 for c in colors][:9] or [EFFECT_COLORS["white"]]
+        if len(colors) == 1:
+            colors.append(EFFECT_COLORS["off"])
+        code = bytes([((mode & 3) << 6) | colors[0], *colors[1:]])
+        return self.effect(mesh_address, phone_key, speed, code)
+
+    def effect(
+        self, mesh_address: int, phone_key: bytes, speed: int, code: bytes
+    ) -> bytes:
+        """Control type 8 with raw bytes after the speed (see scene())."""
+        data = bytearray(12)
+        data[0] = (CONTROL_EFFECT | ((len(code) + 2) << 4)) & 0xFF
+        data[1] = mesh_address & 0xFF
+        data[2] = max(1, min(100, speed))
+        data[3 : 3 + len(code)] = code[:9]
+        return self.generate(
+            CMD_SINGLE_CONTROL, bytes(data), phone_key, forward=True,
+            i2=mesh_address // 256,
+        )
 
     def assign_group(self, mesh_address: int, phone_key: bytes, group: int) -> bytes:
         """Put the light at a mesh address into a group, as the app does.
@@ -542,6 +591,15 @@ def describe_command(command: bytes) -> str:
     return f"command {command.hex()}"
 
 
+def describe_scene(command: bytes) -> str:
+    """Describe a colour effect: speed, then mode << 6 | colour 1, then colours."""
+    speed, first, rest = command[0], command[1], command[2:]
+    mode = {EFFECT_MODE_JUMP: "jump", EFFECT_MODE_FADE: "fade"}.get(first >> 6, f"mode {first >> 6}")
+    colors = [first & 7, *[c & 7 for c in rest]]
+    names = ", ".join(EFFECT_COLOR_NAMES[c] for c in colors)
+    return f"effect {mode} {names} at speed {speed}"
+
+
 def describe_time_sync(command: bytes) -> str:
     """Describe the BRMesh app's clock broadcast (control type 9).
 
@@ -587,6 +645,10 @@ def describe_action(info: dict) -> str:
                 f"group {info['group']} {name} lights" if info.get("group") else f"all {name} lights"
             )
             return f"{target}: {describe_command(bytes.fromhex(info.get('command', '')))}"
+        if info.get("control_type") == CONTROL_EFFECT:
+            command = bytes.fromhex(info.get("command", ""))
+            if len(command) >= 2:
+                return f"{describe_scene(command)} on mesh address {info.get('mesh_address')}"
         if info.get("control_type") == CONTROL_GROUP_ASSIGN:
             command = bytes.fromhex(info.get("command", ""))
             group = command[0] if command else None

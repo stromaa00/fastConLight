@@ -348,6 +348,17 @@ Flur off:             43 2a a8 01 00   control type 3 with group id 1 (all off w
 ```
 So control type 3 is `[3 | (len + 3) << 4] [type lo] [type hi] [group] [command]`: **group 0 = all lights**, other ids = fixed groups. Groups are plain old-protocol commands, not the `a5 5a` frames. Implemented: `CommandBuilder.assign_group()`, `light_by_type(..., group=)`; debug tool `group add/remove` and targets `group:<id>`; integration 2.21.0: groups under Configure → Groups, one light entity per group. A light stores one group byte, so it is in at most one group; assigning another group replaces it, group 0 removes it. Open: how the app picks ids (1, 2, …?), whether the heartbeat's group byte shows the group.
 
+**Effects** (second BRMesh-type app, light at mesh address 16, decrypted; raw frames and key left out):
+```
+Full color fade:   88 10 01 42 03 01 05 04 06   fade red, magenta, blue, cyan, green, yellow
+Romantic slow:     48 10 01 43 02               fade magenta, red
+Romantic fast:     48 10 64 43 02               same, speed 100
+(another effect):  58 10 2a 45 01 04            fade cyan, blue, green, speed 42
+```
+**Layout (decoded with the app's `BLESceneInfo`, z30.b/e/f/g):** a scene is `jiffies` (speed), `mode` (0 or 1) and a list of `RgbStatus` (red/green/blue on or off): `[8 | (2 + n) << 4] [mesh address] [speed 1-100] [mode << 6 | colour 1] [colour 2] … [colour n]`. Colour bits are in the blue-red-green order of the colour command: **bit 0 blue, bit 1 red, bit 2 green** (1 blue, 2 red, 3 magenta, 4 green, 5 cyan, 6 yellow, 7 white, 0 off), confirmed by the user (red/yellow sent with the wrong order showed blue/pink) and by "Full color fade" matching the app's default list red, magenta, blue, cyan, green, yellow exactly. Mode 1 = fade; mode 0 = jump (assumed). A single colour gets "off" added. Implemented: `CommandBuilder.scene()`, debug tool `scene <addr> <speed> <fade|jump> <colours…>` and a colour builder. **Stopping (tested):** a colour or white command (6-byte form) ends the effect and sets that colour; the short on command (`0x80 | level`) doesn't; off switches the light off, and after on the effect continues (the light keeps the effect as its state). Open: confirm mode 0 (jump).
+
+Other effect-related calls seen (not decoded): `controlDelaySceneWithDevice` with `BLEDelaySceneInfo` (start brightness, step ±1, count, interval: timed fade-in/out), `controlColorChange` and `controlRgbcwModeV2` with lists of full RGB `BLEModeRgbcwBean` (custom colour modes, probably another frame format).
+
 **Discovery from a light (test data):** type `a1 a8` = 43169 Light RGBW, used in `test_describe_action_from_real_broadcasts`.
 
 ## 9. Open questions

@@ -6,10 +6,12 @@ from typing import Any
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
+    ATTR_EFFECT,
     ATTR_RGB_COLOR,
     ATTR_WHITE,
     ColorMode,
     LightEntity,
+    LightEntityFeature,
 )
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant, callback
@@ -22,6 +24,7 @@ from . import FastconConfigEntry
 from .const import (
     signal_all_lights,
     signal_availability,
+    signal_effects_changed,
     signal_groups_changed,
     signal_new_device,
 )
@@ -112,12 +115,31 @@ class _FastconLightBase(LightEntity, RestoreEntity):
             self._attr_rgb_color = (255, 255, 255)
         self._attr_is_on = False
         self._attr_brightness = 255
+        self._attr_effect = None
+        if ColorMode.RGB in color_modes:
+            self._attr_supported_features = LightEntityFeature.EFFECT
+
+    @property
+    def effect_list(self) -> list[str] | None:
+        """Effects from Configure -> Effects (colour lights only)."""
+        if ColorMode.RGB not in self._attr_supported_color_modes:
+            return None
+        return [e["name"] for e in self._hub.effects]
 
     async def async_added_to_hass(self) -> None:
-        """Restore the last assumed state."""
+        """Restore the last assumed state and follow changes to the effects."""
         await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_effects_changed(self._hub.entry.entry_id),
+                self._async_effects_changed,
+            )
+        )
         if (last := await self.async_get_last_state()) is None:
             return
+        if (effect := last.attributes.get(ATTR_EFFECT)) in (self.effect_list or []):
+            self._attr_effect = effect
         self._attr_is_on = last.state == STATE_ON
         if (brightness := last.attributes.get(ATTR_BRIGHTNESS)) is not None:
             self._attr_brightness = brightness
@@ -126,9 +148,33 @@ class _FastconLightBase(LightEntity, RestoreEntity):
         if (mode := last.attributes.get("color_mode")) in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode(mode)
 
+    @callback
+    def _async_effects_changed(self) -> None:
+        if self._attr_effect not in (self.effect_list or []):
+            self._attr_effect = None
+        self.async_write_ha_state()
+
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn on, optionally changing brightness, colour or white."""
+        """Turn on, optionally changing brightness, colour, white or effect.
+
+        A colour or white command ends a running effect; plain on (or a new
+        brightness) keeps it running, as the lights do.
+        """
         modes = self._attr_supported_color_modes
+        if ATTR_BRIGHTNESS in kwargs:
+            self._attr_brightness = kwargs[ATTR_BRIGHTNESS]
+        if ATTR_EFFECT in kwargs and (effect := self._hub.effect(kwargs[ATTR_EFFECT])):
+            self._send_effect(effect)
+            self._attr_effect = effect["name"]
+            self._attr_is_on = True
+            self.async_write_ha_state()
+            return
+        if self._attr_effect and not (ATTR_WHITE in kwargs or ATTR_RGB_COLOR in kwargs):
+            self._send(light_on(_level(self._attr_brightness or 255)))
+            self._attr_is_on = True
+            self.async_write_ha_state()
+            return
+        self._attr_effect = None
         if ATTR_WHITE in kwargs and ColorMode.WHITE in modes:
             self._attr_color_mode = ColorMode.WHITE
             self._attr_brightness = kwargs[ATTR_WHITE]
@@ -162,6 +208,9 @@ class _FastconLightBase(LightEntity, RestoreEntity):
         return command
 
     def _send(self, command: bytes) -> None:
+        raise NotImplementedError
+
+    def _send_effect(self, effect: dict) -> None:
         raise NotImplementedError
 
 
@@ -208,10 +257,14 @@ class FastconLight(_FastconLightBase):
                 self._attr_color_mode = all_lights.color_mode
             if ColorMode.RGB in self._attr_supported_color_modes:
                 self._attr_rgb_color = all_lights.rgb_color
+                self._attr_effect = all_lights.effect
         self.async_write_ha_state()
 
     def _send(self, command: bytes) -> None:
         self._hub.async_send_light(self._device, command)
+
+    def _send_effect(self, effect: dict) -> None:
+        self._hub.async_send_effect([self._device], effect)
 
 
 class FastconAllLights(_FastconLightBase):
@@ -226,6 +279,9 @@ class FastconAllLights(_FastconLightBase):
 
     def _send(self, command: bytes) -> None:
         self._hub.async_send_all(command)
+
+    def _send_effect(self, effect: dict) -> None:
+        self._hub.async_send_effect(list(self._hub.devices.values()), effect)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn all lights on; the single lights take over the state."""
@@ -284,6 +340,9 @@ class FastconGroupLight(_FastconLightBase):
 
     def _send(self, command: bytes) -> None:
         self._hub.async_send_group(self._group_id, command)
+
+    def _send_effect(self, effect: dict) -> None:
+        self._hub.async_send_effect(self._hub.group_members(self._group_id), effect)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the group on; its lights take over the state."""

@@ -144,6 +144,35 @@ class ProtocolTest(unittest.TestCase):
         self.assertTrue(off["data"].startswith("432aa80100"))
         self.assertEqual(protocol.describe_action(off), "group 1 Light RGBCW lights: light off")
 
+    def test_effect_matches_the_app(self):
+        # Decrypted app captures: "Romantic" slow / fast on mesh address 16
+        key = bytes.fromhex("A1A2A3A4")
+        builder = protocol.CommandBuilder(1)
+        slow = protocol.describe_broadcast(builder.effect(16, key, 1, bytes((0x43, 0x02))), key)
+        fast = protocol.describe_broadcast(builder.effect(16, key, 100, bytes((0x43, 0x02))), key)
+        self.assertTrue(slow["data"].startswith("4810014302"))
+        self.assertTrue(fast["data"].startswith("4810644302"))
+        self.assertEqual(
+            protocol.describe_action(fast),
+            "effect fade magenta, red at speed 100 on mesh address 16",
+        )
+
+    def test_scene_encodes_colours_like_the_app(self):
+        # Decrypted captures: "Romantic" = fade magenta, red; "Full color fade"
+        # = fade red, magenta, blue, cyan, green, yellow (the app's default list)
+        key = bytes.fromhex("A1A2A3A4")
+        c = protocol.EFFECT_COLORS
+        builder = protocol.CommandBuilder(1)
+        romantic = builder.scene(16, key, 1, protocol.EFFECT_MODE_FADE, [c["magenta"], c["red"]])
+        self.assertTrue(protocol.describe_broadcast(romantic, key)["data"].startswith("4810014302"))
+        full = builder.scene(
+            16, key, 1, protocol.EFFECT_MODE_FADE,
+            [c["red"], c["magenta"], c["blue"], c["cyan"], c["green"], c["yellow"]],
+        )
+        self.assertTrue(protocol.describe_broadcast(full, key)["data"].startswith("881001420301050406"))
+        single = builder.scene(16, key, 50, protocol.EFFECT_MODE_JUMP, [c["red"]])
+        self.assertTrue(protocol.describe_broadcast(single, key)["data"].startswith("4810320200"))
+
     def test_bind_command_round_trip(self):
         phone_key = bytes.fromhex("A1A2A3A4")
         device_key = bytes.fromhex("5E367BC4")

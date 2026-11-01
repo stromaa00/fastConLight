@@ -120,6 +120,7 @@ BRMesh packets are 31 bytes and fit a legacy (Bluetooth 4.x) advertisement, whic
 - **BLE:** Extended advertising callbacks support
 - **WiFi:** 2.4GHz network
 - **Groups:** a light stores one group id (0 = none). **Configure → Groups** saves a group (id 1–255, name, lights) and sends control type 1 `21 <mesh address> <group>` (not forwarded) to every light that joins or leaves (group 0). Groups and memberships are stored with the devices. Details and captures: [docs/BRMESH_APP_NOTES.md](docs/BRMESH_APP_NOTES.md#7-groups).
+- **Effects:** **Configure → Effects** stores colour effects (name, mode fade/jump, speed 1–100, up to 9 colours) with the devices; defaults Full color fade, Full color jump, Romantic. Colour lights, groups and All lights list them as HA effects. Starting one sends control type 8 `[8 | (2 + n) << 4] [address] [speed] [mode << 6 | colour 1] [colour 2…]` (colours 3-bit: bit 0 blue, bit 1 red, bit 2 green) to each light separately (effects address one light). A colour or white command ends an effect; plain on or a new brightness sends the short on command, which keeps it running. Details: [docs/BRMESH_APP_NOTES.md](docs/BRMESH_APP_NOTES.md).
 - **Storage:** Custom partition table for ESP32-C6
 
 ### 3.3 ESPHome Configuration Files

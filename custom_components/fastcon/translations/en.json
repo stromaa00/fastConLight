@@ -29,6 +29,7 @@
         "menu_options": {
           "settings": "Settings",
           "groups": "Groups",
+          "effects": "Effects",
           "add_device": "Add a light manually"
         }
       },
@@ -78,6 +79,32 @@
           "group_id": "1-255. Use the id of a group made in the BRMesh app to take it over (Flur is usually 1).",
           "area": "Puts the group's device into this area, so controlling the area switches the whole group with one command per light type. Keep the group's lights themselves out of this area, or the area also switches them one by one."
         }
+      },
+      "effects": {
+        "title": "Effects",
+        "description": "Colour effects offered by every colour light, group and All lights. Pick one to change or delete it, or start a new one."
+      },
+      "effect_edit": {
+        "title": "Effect",
+        "description": "The light runs through the colours in order. Lights only show these 7 colours (each of red, green and blue on or off). A single colour alternates with off. Choosing a colour or white on a light ends its effect; switching off and on keeps it.",
+        "data": {
+          "name": "Name",
+          "mode": "Mode",
+          "speed": "Speed",
+          "color_1": "Colour 1",
+          "color_2": "Colour 2",
+          "color_3": "Colour 3",
+          "color_4": "Colour 4",
+          "color_5": "Colour 5",
+          "color_6": "Colour 6",
+          "color_7": "Colour 7",
+          "color_8": "Colour 8",
+          "color_9": "Colour 9",
+          "delete": "Delete this effect"
+        },
+        "data_description": {
+          "speed": "1 slow … 100 fast"
+        }
       }
     },
     "error": {
@@ -88,7 +115,9 @@
       "invalid_device_type": "Must be exactly 4 hex characters, e.g. A8A1.",
       "name_required": "Enter a name.",
       "group_id_in_use": "Another group already uses this id.",
-      "lights_in_area": "These lights are in this area too: {lights}. Controlling the area would then also switch them one by one (slower). Save again to keep it anyway."
+      "lights_in_area": "These lights are in this area too: {lights}. Controlling the area would then also switch them one by one (slower). Save again to keep it anyway.",
+      "effect_name_in_use": "Another effect already has this name.",
+      "colors_required": "Pick at least one colour."
     },
     "abort": {
       "not_loaded": "The integration must be loaded to add lights."
@@ -124,6 +153,27 @@
     "sensor": {
       "bound_mesh_address": {
         "name": "Bound mesh address"
+      }
+    }
+  },
+  "selector": {
+    "effect_mode": {
+      "options": {
+        "fade": "Fade",
+        "jump": "Jump"
+      }
+    },
+    "effect_color": {
+      "options": {
+        "none": "—",
+        "off": "Off (dark)",
+        "red": "Red",
+        "green": "Green",
+        "blue": "Blue",
+        "yellow": "Yellow",
+        "magenta": "Magenta",
+        "cyan": "Cyan",
+        "white": "White"
       }
     }
   }

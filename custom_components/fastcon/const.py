@@ -54,6 +54,22 @@ def signal_availability(entry_id: str) -> str:
     return f"{DOMAIN}_availability_{entry_id}"
 
 
+# Effects every mesh starts with (Configure -> Effects); colours are names from
+# protocol.EFFECT_COLORS, mode "fade" or "jump", speed 1-100
+DEFAULT_EFFECTS = [
+    {"name": "Full color fade", "mode": "fade", "speed": 50,
+     "colors": ["red", "magenta", "blue", "cyan", "green", "yellow"]},
+    {"name": "Full color jump", "mode": "jump", "speed": 50,
+     "colors": ["red", "magenta", "blue", "cyan", "green", "yellow"]},
+    {"name": "Romantic", "mode": "fade", "speed": 30, "colors": ["magenta", "red"]},
+]
+
+
+def signal_effects_changed(entry_id: str) -> str:
+    """Dispatcher signal sent when effects are added, changed or deleted."""
+    return f"{DOMAIN}_effects_changed_{entry_id}"
+
+
 def group_device_id(entry_id: str, group_id: int) -> str:
     """Device registry identifier of a group (its own device under the hub)."""
     return f"{entry_id}_group_{group_id}"

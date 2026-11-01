@@ -40,6 +40,8 @@ Lights already set up in ESPHome can be added under the integration's **Configur
 
 **Groups:** under **Configure → Groups** create a group, give it a name and pick its lights; saving sends the memberships to the lights. Each group is its own device under the mesh, with its lights listed under it, and has a light entity that switches all its lights with one command per light type, like the BRMesh app. Pick an **Area** to control the group through it ("turn on the hallway lights"); keep the group's lights themselves out of that area, or the area also switches them one by one. A light is in at most one group. To take over a group from the app, use its id (the app's first group is usually 1).
 
+**Effects:** under **Configure → Effects** build colour effects (name, fade or jump, speed, up to 9 colours from red, green, blue, yellow, magenta, cyan, white, off). They appear in the effect list of every colour light, group and *All lights*. Choosing a colour or white ends an effect; switching off and on keeps it. Starts with Full color fade, Full color jump and Romantic.
+
 **All lights at once:** every mesh has an **All lights** entity that switches all its lights with a single command, which is much faster than a group of single lights. Experimental: if your lights don't react to it, please open an issue.
 
 **Lights out of range:** flash an ESP32 with [brmesh-transmitter.yaml](brmesh-transmitter.yaml) (it's also a Bluetooth proxy) and select its `send_brmesh` action under **Configure → Settings → ESP32 transmitters**. Commands are then sent from the ESP32 too.

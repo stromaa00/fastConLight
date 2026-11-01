@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+import copy
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import timedelta
@@ -42,8 +43,10 @@ from .const import (
     MIN_HEARTBEAT_SAMPLES,
     MISSED_HEARTBEATS,
     SCAN_ADOPT_WINDOW,
+    DEFAULT_EFFECTS,
     UNAVAILABLE_AFTER,
     group_device_id,
+    signal_effects_changed,
     signal_availability,
     signal_device_updated,
     signal_groups_changed,
@@ -51,6 +54,9 @@ from .const import (
 )
 from .protocol import (
     ALL_LIGHTS_ADDRESS,
+    EFFECT_COLORS,
+    EFFECT_MODE_FADE,
+    EFFECT_MODE_JUMP,
     DEFAULT_ENCRYPT_KEY,
     MANUFACTURER_ID,
     CommandBuilder,
@@ -169,6 +175,8 @@ class FastconHub:
         self.auto_bind = False
         # Group id -> name; members are the devices whose group is that id
         self.groups: dict[int, str] = {}
+        # Colour effects offered by every light entity (Configure -> Effects)
+        self.effects: list[dict] = copy.deepcopy(DEFAULT_EFFECTS)
         # Monotonic time of this mesh's last scan, to adopt the lights it finds
         self.last_scan: float | None = None
         self.recent_broadcasts: deque[dict] = deque(maxlen=RECENT_BROADCASTS)
@@ -187,6 +195,8 @@ class FastconHub:
         stored = await self._store.async_load() or {}
         self.auto_bind = stored.get("auto_bind", False)
         self.groups = {int(gid): name for gid, name in stored.get("groups", {}).items()}
+        if "effects" in stored:
+            self.effects = stored["effects"]
         for data in stored.get("devices", []):
             device = FastconDevice(**data)
             self.devices[device.did] = device
@@ -611,7 +621,54 @@ class FastconHub:
             "devices": [asdict(d) for d in self.devices.values()],
             "auto_bind": self.auto_bind,
             "groups": {str(gid): name for gid, name in self.groups.items()},
+            "effects": self.effects,
         }
+
+    def effect(self, name: str) -> dict | None:
+        """An effect by name."""
+        return next((e for e in self.effects if e["name"] == name), None)
+
+    @callback
+    def async_save_effect(self, old_name: str | None, effect: dict) -> None:
+        """Add an effect, or replace the one called old_name."""
+        index = next(
+            (i for i, e in enumerate(self.effects) if e["name"] == old_name), None
+        )
+        if index is None:
+            self.effects.append(effect)
+        else:
+            self.effects[index] = effect
+        self._async_save()
+        async_dispatcher_send(self.hass, signal_effects_changed(self.entry.entry_id))
+
+    @callback
+    def async_delete_effect(self, name: str) -> None:
+        """Delete an effect."""
+        self.effects = [e for e in self.effects if e["name"] != name]
+        self._async_save()
+        async_dispatcher_send(self.hass, signal_effects_changed(self.entry.entry_id))
+
+    @callback
+    def async_send_effect(self, devices: list[FastconDevice], effect: dict) -> None:
+        """Start a colour effect on these lights, one command each.
+
+        Effects go to a single mesh address, so groups and all lights get one
+        per light. Replaces unsent commands for those lights.
+        """
+        mode = EFFECT_MODE_FADE if effect.get("mode") == "fade" else EFFECT_MODE_JUMP
+        colors = [EFFECT_COLORS[c] for c in effect["colors"] if c in EFFECT_COLORS]
+        speed = int(effect.get("speed", 50))
+        for device in devices:
+            if not is_light(device.device_type):
+                continue
+            self._queue(
+                f"light:{device.did}",
+                lambda d=device: self._builder.scene(
+                    d.mesh_address, self.phone_key, speed, mode, colors
+                ),
+                lambda: f"effect {effect['name']}",
+                device,
+            )
 
     @callback
     def _async_save(self) -> None:

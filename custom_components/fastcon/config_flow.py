@@ -47,12 +47,15 @@ from .const import (
     TRANSMITTER_ACTION_SUFFIX,
 )
 from .hub import FastconDevice
-from .protocol import is_light
+from .protocol import EFFECT_COLORS, is_light
 
 CONF_GROUP_ID = "group_id"
 CONF_LIGHTS = "lights"
 CONF_DELETE = "delete"
 CONF_AREA = "area"
+# Colour slots in the effect form; matches the protocol's 9 colours
+EFFECT_SLOTS = 9
+NO_COLOR = "none"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -151,7 +154,106 @@ class FastconOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Show the menu."""
         return self.async_show_menu(
-            step_id="init", menu_options=["settings", "groups", "add_device"]
+            step_id="init", menu_options=["settings", "groups", "effects", "add_device"]
+        )
+
+    async def async_step_effects(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Menu: a new effect, or one entry per effect to change it."""
+        if self.config_entry.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="not_loaded")
+        hub = self.config_entry.runtime_data
+        return self.async_show_menu(
+            step_id="effects",
+            menu_options={
+                "effect_new": "+ New effect",
+                **{
+                    f"effect_{i}": f"{e['name']} ({e['mode']}, speed {e['speed']}: "
+                    f"{', '.join(e['colors'])})"
+                    for i, e in enumerate(hub.effects)
+                },
+            },
+        )
+
+    async def async_step_effect_new(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Start a new effect."""
+        self._effect_index = None
+        return await self.async_step_effect_edit()
+
+    async def async_step_effect_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Name, mode, speed and colours of an effect."""
+        hub = self.config_entry.runtime_data
+        index = getattr(self, "_effect_index", None)
+        current = hub.effects[index] if index is not None else None
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if current and user_input.get(CONF_DELETE):
+                hub.async_delete_effect(current["name"])
+                return self.async_create_entry(data=dict(self.config_entry.options))
+            name = user_input[CONF_NAME].strip()
+            colors = [
+                user_input[f"color_{i}"]
+                for i in range(1, EFFECT_SLOTS + 1)
+                if user_input.get(f"color_{i}", NO_COLOR) != NO_COLOR
+            ]
+            if not name:
+                errors[CONF_NAME] = "name_required"
+            elif any(
+                e["name"] == name for e in hub.effects if current is None or e is not current
+            ):
+                errors[CONF_NAME] = "effect_name_in_use"
+            elif not colors:
+                errors["base"] = "colors_required"
+            else:
+                hub.async_save_effect(
+                    current["name"] if current else None,
+                    {
+                        "name": name,
+                        "mode": user_input["mode"],
+                        "speed": int(user_input["speed"]),
+                        "colors": colors,
+                    },
+                )
+                return self.async_create_entry(data=dict(self.config_entry.options))
+
+        values = user_input or current or {"name": "", "mode": "fade", "speed": 50, "colors": []}
+        colors = values.get("colors") or [
+            values.get(f"color_{i}", NO_COLOR) for i in range(1, EFFECT_SLOTS + 1)
+        ]
+        color_selector = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[NO_COLOR, *EFFECT_COLORS],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                translation_key="effect_color",
+            )
+        )
+        schema: dict = {
+            vol.Required(CONF_NAME, default=values.get(CONF_NAME, "")): str,
+            vol.Required("mode", default=values.get("mode", "fade")): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["fade", "jump"],
+                    mode=selector.SelectSelectorMode.LIST,
+                    translation_key="effect_mode",
+                )
+            ),
+            vol.Required("speed", default=values.get("speed", 50)): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1, max=100, step=1, mode=selector.NumberSelectorMode.SLIDER
+                )
+            ),
+        }
+        for i in range(1, EFFECT_SLOTS + 1):
+            default = colors[i - 1] if i <= len(colors) else NO_COLOR
+            schema[vol.Optional(f"color_{i}", default=default)] = color_selector
+        if current is not None:
+            schema[vol.Optional(CONF_DELETE, default=False)] = bool
+        return self.async_show_form(
+            step_id="effect_edit", data_schema=vol.Schema(schema), errors=errors
         )
 
     async def async_step_groups(
@@ -183,16 +285,24 @@ class FastconOptionsFlow(OptionsFlow):
         return await self.async_step_group_edit()
 
     def __getattr__(self, name: str) -> Any:
-        """Menu entries group_<id> open that group's form."""
-        prefix = "async_step_group_"
-        if name.startswith(prefix) and name[len(prefix) :].isdigit():
-            group_id = int(name[len(prefix) :])
+        """Menu entries group_<id> and effect_<index> open that item's form."""
+        for prefix, attr, target in (
+            ("async_step_group_", "_group_id", "async_step_group_edit"),
+            ("async_step_effect_", "_effect_index", "async_step_effect_edit"),
+        ):
+            if name.startswith(prefix) and name[len(prefix) :].isdigit():
+                value = int(name[len(prefix) :])
 
-            async def _step(user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-                self._group_id = group_id
-                return await self.async_step_group_edit()
+                async def _step(
+                    user_input: dict[str, Any] | None = None,
+                    attr: str = attr,
+                    value: int = value,
+                    target: str = target,
+                ) -> ConfigFlowResult:
+                    setattr(self, attr, value)
+                    return await getattr(self, target)()
 
-            return _step
+                return _step
         raise AttributeError(name)
 
     async def async_step_group_edit(
