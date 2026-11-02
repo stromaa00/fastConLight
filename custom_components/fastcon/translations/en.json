@@ -74,7 +74,8 @@
           "group_id": "Group id",
           "lights": "Lights",
           "delete": "Delete this group",
-          "area": "Area"
+          "area": "Area",
+          "back": "Back without saving"
         },
         "data_description": {
           "group_id": "1-255. Use the id of a group made in the BRMesh app to take it over (Flur is usually 1).",
@@ -101,7 +102,8 @@
           "color_7": "Colour 7",
           "color_8": "Colour 8",
           "color_9": "Colour 9",
-          "delete": "Delete this effect"
+          "delete": "Delete this effect",
+          "back": "Back without saving"
         },
         "data_description": {
           "speed": "1 slow … 100 fast"

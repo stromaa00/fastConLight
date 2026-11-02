@@ -42,6 +42,7 @@ from .const import (
     HEARTBEAT_BURST_GAP,
     MIN_HEARTBEAT_SAMPLES,
     MISSED_HEARTBEATS,
+    REPORTED_ADDRESS_WINDOW,
     SCAN_ADOPT_WINDOW,
     DEFAULT_EFFECTS,
     UNAVAILABLE_AFTER,
@@ -163,6 +164,11 @@ class FastconHub:
         self._wakeup = asyncio.Event()
         # Monotonic time of the last heartbeat per DID, and DIDs considered offline
         self._last_heartbeat: dict[str, float] = {}
+        # Mesh address -> last heartbeat from it (decoded with our phone key)
+        self._address_heartbeat: dict[int, float] = {}
+        # DID -> (address the light reported when it announced itself, time),
+        # waiting for a heartbeat from that address to confirm it
+        self._reported_address: dict[str, tuple[int, float]] = {}
         self._unavailable: set[str] = set()
         self._last_heartbeat_time: dict[str, str] = {}
         self._heartbeat_intervals: dict[str, deque[float]] = {}
@@ -279,10 +285,12 @@ class FastconHub:
                 return
             used = {d.mesh_address for d in self.devices.values()}
             # Keep the address the device already has (e.g. from the BRMesh
-            # app) if it's free, so nothing else in the mesh has to change.
+            # app) if it's free, so nothing else in the mesh has to change,
+            # or if a heartbeat shows it really has it in this mesh.
             address = (
                 found.mesh_address
-                if found.mesh_address and found.mesh_address not in used
+                if found.mesh_address
+                and (found.mesh_address not in used or self._heartbeat_from(found.mesh_address))
                 else self.next_free_address()
             )
             _LOGGER.info(
@@ -296,9 +304,47 @@ class FastconHub:
                 mesh_address=address,
             )
             self.async_add_device(device)
+        else:
+            self._async_check_reported_address(device, found.mesh_address)
         # A discovered light waits for a bind (discovery response) to join
         # the mesh, so answer it with the address Home Assistant manages.
         self._async_auto_bind(device, found.mesh_address)
+
+    def _heartbeat_from(self, mesh_address: int) -> bool:
+        """Whether a heartbeat with our phone key came from this address lately."""
+        last = self._address_heartbeat.get(mesh_address)
+        return last is not None and time.monotonic() - last < REPORTED_ADDRESS_WINDOW
+
+    @callback
+    def _async_check_reported_address(self, device: FastconDevice, reported: int) -> None:
+        """Take the address a known light reports if it is really in this mesh.
+
+        The announcement isn't encrypted, so the address only counts once a
+        heartbeat decoded with this mesh's phone key comes from it; until then
+        it is kept as a candidate.
+        """
+        if not reported or reported == device.mesh_address:
+            self._reported_address.pop(device.did, None)
+            return
+        if self._heartbeat_from(reported):
+            self._async_adopt_reported_address(device, reported)
+        else:
+            self._reported_address[device.did] = (reported, time.monotonic())
+
+    @callback
+    def _async_adopt_reported_address(self, device: FastconDevice, reported: int) -> None:
+        _LOGGER.info(
+            "BRMesh %s reports mesh address %d and a heartbeat with this mesh's key "
+            "comes from it; updating it (was %d)",
+            device.name, reported, device.mesh_address,
+        )
+        self._reported_address.pop(device.did, None)
+        device.mesh_address = reported
+        if device.new_address == reported:
+            device.new_address = None
+            device.bind_sent = False
+        self._async_save()
+        async_dispatcher_send(self.hass, signal_device_updated(self.entry.entry_id))
 
     @callback
     def _async_auto_bind(self, device: FastconDevice, reported_address: int) -> None:
@@ -449,6 +495,13 @@ class FastconHub:
 
     @callback
     def _async_on_heartbeat(self, address: str, beat: Heartbeat) -> None:
+        now = time.monotonic()
+        self._address_heartbeat[beat.mesh_address] = now
+        for did, (reported, when) in list(self._reported_address.items()):
+            if now - when > REPORTED_ADDRESS_WINDOW:
+                del self._reported_address[did]
+            elif reported == beat.mesh_address and (device := self.devices.get(did)):
+                self._async_adopt_reported_address(device, reported)
         self._async_confirm_binds(beat.mesh_address)
         # Heartbeats carry no DID, so lights sharing a mesh address all count it
         devices = [d for d in self.devices.values() if d.mesh_address == beat.mesh_address]
@@ -610,6 +663,7 @@ class FastconHub:
             self._heartbeat_intervals.pop(did, None)
             self._last_auto_bind.pop(did, None)
             self._pending_bind.discard(did)
+            self._reported_address.pop(did, None)
             self._unavailable.discard(did)
             self._async_save()
 

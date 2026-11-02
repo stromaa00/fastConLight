@@ -370,7 +370,7 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 
 - Light commands are encrypted with the **phone key**, not the device key.
 - Bind is command type 2 (not forwarded), encrypted with the device key, with data `DID(6) + mesh address + 0x01 + phone key(4)`.
-- A light only accepts a bind while it is in discovery mode, which it enters after a **power cycle** (a scan request doesn't do it). Binds sent at other times are ignored and the light keeps its old address. The integration therefore keeps every manual bind (Bind, Bind all devices, mesh address change) pending and sends it again as soon as the light announces itself, i.e. after it was switched off and on. A heartbeat from the expected address completes it.
+- A light only accepts a bind while it is in discovery mode, which it enters after a **power cycle** (a scan request doesn't do it). Binds sent at other times are ignored and the light keeps its old address. The integration therefore keeps every manual bind (Bind, Bind all devices, mesh address change) pending and sends it again as soon as the light announces itself, i.e. after it was switched off and on. A heartbeat from the expected address completes it. Conversely, a known light that announces itself with a different address than Home Assistant has gets that address once a heartbeat decoded with the mesh's phone key comes from it within 15 minutes of the announcement; the announcement itself is unencrypted and could come from a light bound in another mesh.
 - In discovery broadcasts the 6-byte DID is at payload bytes 4-9 (the last 2 bytes are the name), the type at 10-11 (little endian) and the key at 12-15.
 - Colour temperature is not mapped yet; CCT lights get brightness only.
 

@@ -34,7 +34,7 @@ Uses the Bluetooth adapter of the Home Assistant host, so no ESP32 is needed. Co
 3. **Settings → Devices & Services → Add Integration → BRMesh / Fastcon**, pick the adapter and enter the phone key (default `A1A2A3A4`)
 4. Press **Scan for devices**, then **Bind all devices**. Or turn on **Auto-bind discovered lights** to have every light found by a scan bound automatically.
 
-**Mesh addresses:** on a light's device page, set **Mesh address** and press **Bind**; nothing is sent before that. **Bound mesh address** shows the address in use and only changes once the light's heartbeat comes from the new address (power cycle the light if it doesn't). Several lights may get the same address, then they switch together.
+**Mesh addresses:** on a light's device page, set **Mesh address** and press **Bind**; nothing is sent before that. **Bound mesh address** shows the address in use and only changes once the light's heartbeat comes from the new address (power cycle the light if it doesn't). Several lights may get the same address, then they switch together. When a known light announces itself (after a scan and a power cycle) with another address, Home Assistant takes that address as soon as a heartbeat decoded with the mesh's phone key comes from it (within 15 minutes), so it follows changes made elsewhere, e.g. in the app.
 
 Lights already set up in ESPHome can be added under the integration's **Configure → Add a light manually**.
 
@@ -65,7 +65,7 @@ brmesh> on 5 50
 brmesh> off all
 ```
 
-For a browser UI with the same functions (connection form, light control, discovered lights with Bind buttons, heartbeats, filterable live log):
+For a browser UI with the same functions (connection form, light control, discovered lights with Bind buttons, sortable and kept between sessions in `~/.brmesh_debug_lights.json` (`forget <did>` or × removes one), heartbeats, filterable live log):
 
 ```bash
 pip install aioesphomeapi aiohttp

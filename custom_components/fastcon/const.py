@@ -45,7 +45,11 @@ HEARTBEAT_BURST_GAP = 60  # seconds
 AUTO_BIND_COOLDOWN = 60  # seconds
 # With several meshes, lights discovered this long after a mesh's scan go to
 # that mesh.
-SCAN_ADOPT_WINDOW = 120  # seconds
+SCAN_ADOPT_WINDOW = 120
+# A mesh address a light reports when it announces itself counts as its real
+# one if a heartbeat decoded with the mesh's phone key comes from it within
+# this time (before or after the announcement)
+REPORTED_ADDRESS_WINDOW = 900  # seconds
 AVAILABILITY_CHECK_INTERVAL = 30  # seconds
 
 

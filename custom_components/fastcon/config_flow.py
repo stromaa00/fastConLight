@@ -52,6 +52,9 @@ from .protocol import EFFECT_COLORS, device_type_name, is_light
 CONF_GROUP_ID = "group_id"
 CONF_LIGHTS = "lights"
 CONF_DELETE = "delete"
+CONF_BACK = "back"
+# Menu entry leading back to the main menu (HA flows have no back button)
+BACK_TO_MENU = {"init": "← Back"}
 CONF_AREA = "area"
 # Colour slots in the effect form; matches the protocol's 9 colours
 EFFECT_SLOTS = 9
@@ -214,6 +217,7 @@ class FastconOptionsFlow(OptionsFlow):
         return self.async_show_menu(
             step_id="effects",
             menu_options={
+                **BACK_TO_MENU,
                 "effect_new": "+ New effect",
                 "effect_builtin": "+ Add the BRMesh app's built-in effects",
                 **{
@@ -247,6 +251,8 @@ class FastconOptionsFlow(OptionsFlow):
         current = hub.effects[index] if index is not None else None
         errors: dict[str, str] = {}
         if user_input is not None:
+            if user_input.get(CONF_BACK):
+                return await self.async_step_effects()
             if current and user_input.get(CONF_DELETE):
                 hub.async_delete_effect(current["name"])
                 return self.async_create_entry(data=dict(self.config_entry.options))
@@ -307,6 +313,7 @@ class FastconOptionsFlow(OptionsFlow):
             schema[vol.Optional(f"color_{i}", default=default)] = color_selector
         if current is not None:
             schema[vol.Optional(CONF_DELETE, default=False)] = bool
+        schema[vol.Optional(CONF_BACK, default=False)] = bool
         return self.async_show_form(
             step_id="effect_edit", data_schema=vol.Schema(schema), errors=errors
         )
@@ -323,6 +330,7 @@ class FastconOptionsFlow(OptionsFlow):
         return self.async_show_menu(
             step_id="groups",
             menu_options={
+                **BACK_TO_MENU,
                 "group_new": "+ New group",
                 **{
                     f"group_{gid}": f"{name} (id {gid}, "
@@ -369,6 +377,10 @@ class FastconOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         placeholders = {"group_id": str(group_id or ""), "lights": ""}
         if user_input is not None:
+            if user_input.get(CONF_BACK):
+                if hub.groups:
+                    return await self.async_step_groups()
+                return await self.async_step_init()
             if group_id is not None and user_input.get(CONF_DELETE):
                 hub.async_delete_group(group_id)
                 return self.async_create_entry(data=dict(self.config_entry.options))
@@ -443,6 +455,7 @@ class FastconOptionsFlow(OptionsFlow):
         ] = selector.AreaSelector()
         if group_id is not None:
             schema[vol.Optional(CONF_DELETE, default=False)] = bool
+        schema[vol.Optional(CONF_BACK, default=False)] = bool
         return self.async_show_form(
             step_id="group_edit",
             data_schema=vol.Schema(schema),
