@@ -200,7 +200,7 @@
 
   <div class="col">
     <section>
-      <h2>Discovered lights</h2>
+      <h2>Discovered lights <span class="hint" style="font-weight:normal">kept between sessions · click a column to sort</span></h2>
       <div id="discovered"><div class="empty">None yet. Power cycle a light and press Scan.</div></div>
     </section>
     <section>
@@ -234,6 +234,18 @@ const $ = (id) => document.getElementById(id);
 const hidden = new Set();
 // Addresses typed into the discovered-lights table, kept across re-renders
 const addrInput = {};
+// Discovered-lights sort: column and direction, kept in the browser
+let discSort = JSON.parse(localStorage.getItem("brmesh-debug-disc-sort") || '{"col":"address","dir":1}');
+const DISC_COLS = { name: "Name", did: "DID", type: "Type", key: "Key", address: "Addr" };
+function discSorted(list) {
+  const { col, dir } = discSort;
+  return list.map((d, i) => ({ d, i })).sort((a, b) => {
+    const x = a.d[col], y = b.d[col];
+    // Unbound (address 0) last when sorting by address
+    const c = col === "address" ? ((x || 999) - (y || 999)) : String(x).localeCompare(String(y));
+    return dir * c || a.d.did.localeCompare(b.d.did);
+  });
+}
 let state = { connected: false };
 
 async function api(path, body) {
@@ -295,12 +307,17 @@ function render() {
   if (c && state.watch && document.activeElement !== $("watch")) $("watch").value = state.watch;
 
   const disc = state.discovered || [];
+  // Names of discovered lights per mesh address (heartbeats can't tell them apart)
+  const byAddr = {};
+  disc.forEach((d) => { if (d.address) (byAddr[d.address] ||= []).push(d.name); });
   $("discovered").innerHTML = disc.length ? `<table>
-    <tr><th>Name</th><th>DID</th><th>Type</th><th>Key</th><th>Addr</th><th>Address</th><th></th></tr>
-    ${disc.map((d, i) => `<tr>
+    <tr>${Object.entries(DISC_COLS).map(([c, label]) =>
+      `<th data-sort="${c}" style="cursor:pointer" title="Sort">${label}${discSort.col === c ? (discSort.dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}<th>Address</th><th></th></tr>
+    ${discSorted(disc).map(({ d, i }) => `<tr${d.seen ? "" : ' style="opacity:.6" title="Saved from an earlier session, not seen yet in this one"'}>
       <td><b>${esc(d.name)}</b></td><td><code>${esc(d.did)}</code></td><td>${esc(d.type)}</td>
       <td><code>${esc(d.key)}</code></td><td>${d.address || "–"}${d.heartbeat && d.address
-        ? ` <span title="Heartbeat received from this address" style="color:var(--ok)">♥</span>` : ""}${d.pending
+        ? ` <span title="Heartbeat received from this address" style="color:var(--ok)">♥</span>` : ""}${d.address && byAddr[d.address].length > 1
+        ? ` <span title="Same mesh address as ${esc(byAddr[d.address].filter((n) => n !== d.name).join(", "))}: they switch together and share heartbeats" style="color:var(--warn)">⚠ shared</span>` : ""}${d.pending
         ? ` <span title="Bind sent, waiting for a heartbeat from this address" style="color:var(--warn)">→ ${d.pending}?</span>` : ""}</td>
       <td><input type="number" min="1" max="255" id="bind-${i}" data-addr-for="${esc(d.did)}"
         value="${addrInput[d.did] ?? (d.address || "")}" title="Mesh address to bind to and to switch"></td>
@@ -309,13 +326,15 @@ function render() {
         <button data-light-on="${i}" title="Turn on at the address in the field">On</button>
         <button data-light-off="${i}" title="Turn off at the address in the field">Off</button>
         <button data-copy="${esc(d.identity)}" title="Copy NAME-DID-TYPE-KEY for 'Add a light manually'">Copy ID</button>
+        <button data-forget="${esc(d.did)}" title="Remove from this list">×</button>
       </td></tr>`).join("")}</table>`
     : `<div class="empty">None yet. Power cycle a light and press Scan.</div>`;
 
   const beats = state.heartbeats || [];
   $("heartbeats").innerHTML = beats.length ? `<table>
-    <tr><th>Address</th><th>Group</th><th>RSSI</th><th>Last</th><th></th></tr>
-    ${beats.map((b) => `<tr><td><b>${b.address}</b></td><td>${b.group}</td><td>${b.rssi} dBm</td>
+    <tr><th>Address</th><th>Lights</th><th>Group</th><th>RSSI</th><th>Last</th><th></th></tr>
+    ${beats.map((b) => `<tr><td><b>${b.address}</b></td><td>${esc((byAddr[b.address] || ["?"]).join(", "))}${(byAddr[b.address] || []).length > 1
+      ? ` <span title="Heartbeats carry only the address, so these lights share one row" style="color:var(--warn)">⚠</span>` : ""}</td><td>${b.group}</td><td>${b.rssi} dBm</td>
       <td>${esc(b.time)}</td><td><button data-select="${b.address}">Select</button></td></tr>`).join("")}</table>`
     : `<div class="empty">None received.</div>`;
 
@@ -425,6 +444,13 @@ document.addEventListener("click", (e) => {
   } else if (t.dataset.lightOff !== undefined) {
     const addr = rowAddress(t.dataset.lightOff, "switch");
     if (addr) run(`off ${addr}`);
+  } else if (t.dataset.forget !== undefined) {
+    run(`forget ${t.dataset.forget}`);
+  } else if (t.dataset.sort !== undefined) {
+    const col = t.dataset.sort;
+    discSort = { col, dir: discSort.col === col ? -discSort.dir : 1 };
+    localStorage.setItem("brmesh-debug-disc-sort", JSON.stringify(discSort));
+    render();
   } else if (t.dataset.copy !== undefined) {
     navigator.clipboard.writeText(t.dataset.copy);
     addLog("info", `Copied ${t.dataset.copy}`);

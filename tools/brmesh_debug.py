@@ -20,6 +20,7 @@ import asyncio
 import dataclasses
 from datetime import datetime
 import importlib.util
+import json
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -202,6 +203,35 @@ def _now() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
+# Discovered lights are kept here between sessions (they include each light's key)
+LIGHTS_FILE = Path(os.environ.get("BRMESH_LIGHTS_FILE") or Path.home() / ".brmesh_debug_lights.json")
+
+
+def load_lights() -> dict[str, protocol.DiscoveredDevice]:
+    """Lights discovered in earlier sessions, by DID."""
+    try:
+        data = json.loads(LIGHTS_FILE.read_text(encoding="utf-8"))
+        return {
+            d["did"]: protocol.DiscoveredDevice(
+                bytes.fromhex(d["did"]), int(d["type"]), bytes.fromhex(d["key"]), int(d["address"])
+            )
+            for d in data
+        }
+    except FileNotFoundError:
+        return {}
+    except (ValueError, KeyError, TypeError) as err:
+        print(f"Ignoring {LIGHTS_FILE}: {err}")
+        return {}
+
+
+def save_lights(lights: dict[str, protocol.DiscoveredDevice]) -> None:
+    data = [
+        {"did": did, "type": f.device_type, "key": f.key.hex().upper(), "address": f.mesh_address}
+        for did, f in lights.items()
+    ]
+    LIGHTS_FILE.write_text(json.dumps(data, indent=1), encoding="utf-8")
+
+
 class Debugger:
     """One connection to the ESP32 and the state of a debugging session."""
 
@@ -223,7 +253,10 @@ class Debugger:
         self._watch_last: dict[tuple[str, bytes], float] = {}
         self.verbose = False
         self.sniffing = False
-        self.discovered: dict[str, protocol.DiscoveredDevice] = {}
+        # Lights from discovery, including those saved in earlier sessions
+        self.discovered: dict[str, protocol.DiscoveredDevice] = load_lights()
+        # DIDs that announced themselves in this session
+        self.seen: set[str] = set()
         # Mesh address -> (group address, rssi, time) of the last heartbeat
         self.heartbeats: dict[int, tuple[int, int, str]] = {}
         # DID -> address a bind was sent for; adopted when a heartbeat comes from it
@@ -369,8 +402,11 @@ class Debugger:
         )
         if found is not None:
             did = found.did.hex().upper()
-            new = did not in self.discovered
-            self.discovered[did] = found
+            new = did not in self.seen
+            self.seen.add(did)
+            if self.discovered.get(did) != found:
+                self.discovered[did] = found
+                save_lights(self.discovered)
             if new or self.show_all:
                 kind = protocol.device_type_name(found.device_type)
                 self.emit(
@@ -414,10 +450,23 @@ class Debugger:
             del self.pending_binds[did]
             if (found := self.discovered.get(did)) is not None:
                 self.discovered[did] = dataclasses.replace(found, mesh_address=address)
+                save_lights(self.discovered)
             self.emit(
                 "found",
                 f"{_now()} BOUND {did[-4:]} confirmed by heartbeat: mesh address {address}",
             )
+
+    def forget(self, did: str) -> None:
+        """Remove a light (or "all") from the discovered list and its saved copy."""
+        dids = list(self.discovered) if did.lower() == "all" else [did.upper()]
+        for d in dids:
+            if self.discovered.pop(d, None) is None:
+                self.emit("info", f"No discovered light {d}.")
+                continue
+            self.pending_binds.pop(d, None)
+            self.seen.discard(d)
+            self.emit("info", f"Forgot {d[-4:]} ({d}).")
+        save_lights(self.discovered)
 
     def print_discovered(self) -> None:
         if not self.discovered:
@@ -428,6 +477,7 @@ class Debugger:
                 "info",
                 f"  {found.name}  did={did}  {kind}  key={found.key.hex().upper()}  "
                 f"address={found.mesh_address}"
+                + ("" if did in self.seen else "  (saved, not seen this session)")
             )
 
     def print_info(self) -> None:
@@ -480,7 +530,8 @@ def _parse_bind(values: list[str]) -> tuple[str, str, int]:
 
 SHELL_HELP = """\
   scan [relay]                       ask lights in discovery mode to announce themselves
-  found                              list discovered lights
+  found                              list discovered lights (kept between sessions)
+  forget <did>|all                   remove a light from the discovered list
   bind <did> <key> <address>         bind a light (also: bind <identity> <address>)
   bind found <address>               bind the only discovered light
   on <address|all|type:XXXX|types> [pct]
@@ -526,6 +577,8 @@ async def run_line(dbg: Debugger, line: str) -> bool:
         await dbg.scan(relay=bool(rest and rest[0] == "relay"))
     elif cmd == "found":
         dbg.print_discovered()
+    elif cmd == "forget":
+        dbg.forget(rest[0])
     elif cmd == "bind":
         if rest and rest[0] == "found":
             if len(dbg.discovered) != 1:

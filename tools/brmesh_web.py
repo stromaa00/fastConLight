@@ -72,6 +72,7 @@ class Session:
                     "key": found.key.hex().upper(),
                     "address": found.mesh_address,
                     "pending": dbg.pending_binds.get(did),
+                    "seen": did in dbg.seen,
                     "heartbeat": found.mesh_address in dbg.heartbeats,
                     "identity": f"{found.name}-{did}-{found.device_type:04X}-{found.key.hex().upper()}",
                 }
