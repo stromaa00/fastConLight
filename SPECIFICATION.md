@@ -378,7 +378,7 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 
 Lights set up in the BRMesh app already know the app's mesh key (its "phone key"). Entering that key in the integration lets Home Assistant take over without resetting the lights:
 
-1. Find the app's key, e.g. from a diagnostics download while the app sends a command: in the decoded control frames the zero padding reveals it (it was `34333739` in the first real setup).
+1. Find the app's key: while the app sends a command, watch with the debug tool (`tools/brmesh_debug.py`), which reads the key from the zero padding of the control frames. Without an ESP32, set the logger `custom_components.fastcon.broadcasts` to `info` and pass a logged `raw` frame to the tool's `decode <hex>`. The diagnostics download leaves out raw frames and keys so that it can be shared; logs at this level contain them, so don't publish those.
 2. **Configure → Settings → Phone key**: enter the app's key.
 3. Turn on **Auto-bind discovered lights** if Home Assistant should bind lights by itself, then press **Scan for devices**. Each light answers with a discovery broadcast and waits for a bind (discovery response). New lights keep the mesh address they report (header byte 2) if it's free. With auto-bind on, every discovered light is bound right away (at most once a minute per light), and known lights are bound back to the address Home Assistant stores. With it off, nothing is bound until **Bind all devices** is pressed; a log entry notes lights whose reported address differs.
 4. Stop using the app: opening it re-applies its own addresses. If that happens, a scan (with auto-bind on) or **Bind all devices** binds the lights back.
@@ -387,7 +387,7 @@ To hunt for heartbeats that never reach the normal path, set `custom_components.
 
 Heartbeats are accepted from any sender address, as the BRMesh app does (its `BLEFastconHelper` has no address filter); discovery and auto-bind still only act on `11:22:...`. The app names header types 0 scan, 1 discovery, 2 bind, 3 upload (heartbeat/status), 4 upload response, 5 control, 6 control response, 7 remote control, and also parses "new protocol" frames whose manufacturer data starts with `A5 5A` (22 bytes). Their layout isn't known yet; they show up in the diagnostics as `new protocol`. The app also broadcasts the phone's clock to all lights roughly once a minute: control type 9 to mesh address 0 with 7 bytes year-2000, month, day, weekday (0 = Sunday), hour, minute, second in local time; the diagnostics show it as `time sync: ...`. The integration doesn't send it. The diagnostics also report `received_broadcasts` (count of `0xFFF0` frames since `listening_since`), to tell missing reception apart from frames that don't decode.
 
-With the app's key, heartbeats decode (header type 3, data subtype 4) and drive availability: the integration learns each light's heartbeat interval and marks it unavailable after 4 missed heartbeats (at least 5 minutes).
+With the app's key, heartbeats decode (header type 3, data subtype 4) and drive availability: the integration learns each light's heartbeat interval and marks it unavailable after 4 missed heartbeats (at least 5 minutes). The learned interval is stored, so a light that is off when Home Assistant starts also goes unavailable, counted from the start. A light that never had an interval learned stays available, since its heartbeats may simply not reach Home Assistant.
 
 **ESP32 transmitters (range extension)**
 

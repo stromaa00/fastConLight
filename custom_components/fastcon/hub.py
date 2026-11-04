@@ -22,7 +22,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .advertiser import AdvertiseError, Advertiser
+from .advertiser import Advertiser
 from .const import (
     AUTO_BIND_COOLDOWN,
     AVAILABILITY_CHECK_INTERVAL,
@@ -40,6 +40,7 @@ from .const import (
     DEVICE_ADDRESS_PREFIX,
     DOMAIN,
     HEARTBEAT_BURST_GAP,
+    INTERVAL_SAVE_CHANGE,
     MIN_HEARTBEAT_SAMPLES,
     MISSED_HEARTBEATS,
     REPORTED_ADDRESS_WINDOW,
@@ -125,6 +126,15 @@ class FastconDevice:
         return f"{self.name}-{self.did}-{self.device_type:04X}-{self.key}"
 
 
+def _brightness_key(device: FastconDevice) -> str:
+    """Send queue key of the brightness command that follows an effect.
+
+    Not the light's own key, which would replace the effect itself. Newer
+    commands for the light drop it, or it would switch the light back on.
+    """
+    return f"light:brightness:{device.did}"
+
+
 class FastconHub:
     """Owns the device list, the Bluetooth listener and the send queue."""
 
@@ -172,6 +182,10 @@ class FastconHub:
         self._unavailable: set[str] = set()
         self._last_heartbeat_time: dict[str, str] = {}
         self._heartbeat_intervals: dict[str, deque[float]] = {}
+        # Learned intervals kept across restarts, so a light that is off when
+        # Home Assistant starts still goes unavailable
+        self._saved_intervals: dict[str, float] = {}
+        self._started = time.monotonic()
         # Monotonic time of the last automatic bind per DID
         self._last_auto_bind: dict[str, float] = {}
         # Binds the user asked for that the light may not have accepted yet.
@@ -207,6 +221,12 @@ class FastconHub:
         for data in stored.get("devices", []):
             device = FastconDevice(**data)
             self.devices[device.did] = device
+        for did, interval in stored.get("heartbeat_intervals", {}).items():
+            if did in self.devices:
+                self._saved_intervals[did] = interval
+                self._heartbeat_intervals[did] = deque(
+                    [interval] * MIN_HEARTBEAT_SAMPLES, maxlen=20
+                )
 
         self.entry.async_on_unload(
             bluetooth.async_register_callback(
@@ -527,6 +547,7 @@ class FastconHub:
                 self._heartbeat_intervals.setdefault(device.did, deque(maxlen=20)).append(
                     now - last
                 )
+                self._async_remember_interval(device.did)
                 _LOGGER.debug(
                     "Heartbeat from %s (mesh %d) via %s, %.0f s after the previous one",
                     device.name, beat.mesh_address, address, now - last,
@@ -571,19 +592,32 @@ class FastconHub:
     def _async_check_availability(self, _now=None) -> None:
         now = time.monotonic()
         changed = False
-        for did, last in self._last_heartbeat.items():
+        for did, device in self.devices.items():
             if did in self._unavailable or (timeout := self._heartbeat_timeout(did)) is None:
                 continue
+            # No heartbeat since the start: the wait counts from the start
+            last = self._last_heartbeat.get(did, self._started)
             if now - last > timeout:
                 self._unavailable.add(did)
                 changed = True
-                if device := self.devices.get(did):
-                    _LOGGER.info(
-                        "No heartbeat from BRMesh %s for %.0f s; marking it unavailable",
-                        device.name, now - last,
-                    )
+                _LOGGER.info(
+                    "No heartbeat from BRMesh %s for %.0f s; marking it unavailable",
+                    device.name, now - last,
+                )
         if changed:
             self._async_availability_changed()
+
+    @callback
+    def _async_remember_interval(self, did: str) -> None:
+        """Store a light's learned heartbeat interval once it is known or has changed."""
+        intervals = self._heartbeat_intervals[did]
+        if len(intervals) < MIN_HEARTBEAT_SAMPLES:
+            return
+        interval = statistics.median(intervals)
+        saved = self._saved_intervals.get(did)
+        if saved is None or abs(interval - saved) > saved * INTERVAL_SAVE_CHANGE:
+            self._saved_intervals[did] = round(interval)
+            self._async_save()
 
     def _heartbeat_timeout(self, did: str) -> float | None:
         """Seconds without a heartbeat before a light counts as offline.
@@ -660,7 +694,9 @@ class FastconHub:
         """Forget a device."""
         if self.devices.pop(did, None) is not None:
             self._last_heartbeat.pop(did, None)
+            self._last_heartbeat_time.pop(did, None)
             self._heartbeat_intervals.pop(did, None)
+            self._saved_intervals.pop(did, None)
             self._last_auto_bind.pop(did, None)
             self._pending_bind.discard(did)
             self._reported_address.pop(did, None)
@@ -680,6 +716,7 @@ class FastconHub:
             "auto_bind": self.auto_bind,
             "groups": {str(gid): name for gid, name in self.groups.items()},
             "effects": self.effects,
+            "heartbeat_intervals": self._saved_intervals,
         }
 
     def effect(self, name: str) -> dict | None:
@@ -718,11 +755,14 @@ class FastconHub:
         async_dispatcher_send(self.hass, signal_effects_changed(self.entry.entry_id))
 
     @callback
-    def async_send_effect(self, devices: list[FastconDevice], effect: dict) -> None:
+    def async_send_effect(
+        self, devices: list[FastconDevice], effect: dict, brightness: bytes | None = None
+    ) -> None:
         """Start a colour effect on these lights, one command each.
 
         Effects go to a single mesh address, so groups and all lights get one
-        per light. Replaces unsent commands for those lights.
+        per light. Replaces unsent commands for those lights. An effect command
+        has no brightness; a `brightness` command follows it on each light.
         """
         mode = EFFECT_MODE_FADE if effect.get("mode") == "fade" else EFFECT_MODE_JUMP
         colors = [EFFECT_COLORS[c] for c in effect["colors"] if c in EFFECT_COLORS]
@@ -738,6 +778,14 @@ class FastconHub:
                 lambda: f"effect {effect['name']}",
                 device,
             )
+            self._pending.pop(_brightness_key(device), None)
+            if brightness is not None:
+                self._queue(
+                    _brightness_key(device),
+                    lambda d=device: self._builder.light(d.mesh_address, self.phone_key, brightness),
+                    lambda: describe_command(brightness),
+                    device,
+                )
 
     @callback
     def _async_save(self) -> None:
@@ -850,6 +898,7 @@ class FastconHub:
         members = self.group_members(group_id)
         for device in members:
             self._pending.pop(f"light:{device.did}", None)
+            self._pending.pop(_brightness_key(device), None)
         for device_type in sorted({d.device_type for d in members}):
             self._queue(
                 f"light:group:{group_id}:{device_type}",
@@ -946,6 +995,7 @@ class FastconHub:
     @callback
     def async_send_light(self, device: FastconDevice, command: bytes) -> None:
         """Queue a light command, replacing any unsent one for the same light."""
+        self._pending.pop(_brightness_key(device), None)
         self._queue(
             f"light:{device.did}",
             lambda: self._builder.light(device.mesh_address, self.phone_key, command),
@@ -1000,7 +1050,7 @@ class FastconHub:
         async def local() -> None:
             try:
                 await self._advertiser.advertise(MANUFACTURER_ID, payload, self.duration)
-            except (AdvertiseError, OSError) as err:
+            except Exception as err:  # noqa: BLE001 - report any adapter failure
                 errors.append(f"{self.adapter}: {err}")
                 _LOGGER.error("Could not advertise on %s (%s): %s", self.adapter, key, err)
 
@@ -1059,12 +1109,22 @@ class FastconHub:
             while self._pending:
                 key = next(iter(self._pending))
                 build, action, device = self._pending.pop(key)
-                payload = build()
-                self._sent_sequences.append(self._builder.last_sequence)
-                self._sent_payloads.append(payload)
-                _LOGGER.debug("Sending %s: %s", key, payload.hex())
-                async with _send_lock(self.hass):
-                    errors = await self._async_broadcast(key, payload)
-                self._record_sent(
-                    action(), device, payload, "; ".join(errors) if errors else None
-                )
+                try:
+                    await self._async_send(key, build, action, device)
+                except Exception:  # noqa: BLE001 - one bad command must not stop later ones
+                    _LOGGER.exception("Could not send %s", key)
+
+    async def _async_send(
+        self,
+        key: str,
+        build: Callable[[], bytes],
+        action: Callable[[], str],
+        device: FastconDevice | None,
+    ) -> None:
+        payload = build()
+        self._sent_sequences.append(self._builder.last_sequence)
+        self._sent_payloads.append(payload)
+        _LOGGER.debug("Sending %s: %s", key, payload.hex())
+        async with _send_lock(self.hass):
+            errors = await self._async_broadcast(key, payload)
+        self._record_sent(action(), device, payload, "; ".join(errors) if errors else None)

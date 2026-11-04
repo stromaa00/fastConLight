@@ -559,6 +559,26 @@ def describe_broadcast(payload: bytes, phone_key: bytes) -> dict:
     return info
 
 
+# Fields of a broadcast log entry that give away keys: the phone key can be read
+# back from raw frames (zero padding) and safe_key is its last byte, discovery
+# data holds the device key in the clear. Unknown content is treated the same.
+BROADCAST_SECRET_FIELDS = frozenset(
+    {"raw", "data", "device_key", "safe_key", "manufacturer_data", "service_data"}
+)
+
+
+def redact_broadcast(record: dict) -> dict:
+    """A broadcast log entry that is safe to share, e.g. in the diagnostics."""
+    redacted = {
+        field: "**REDACTED**" if field in BROADCAST_SECRET_FIELDS and value is not None else value
+        for field, value in record.items()
+    }
+    if record.get("kind") == "new protocol":
+        # describe_action quotes these frames' undecoded bytes
+        redacted["action"] = "new-protocol frame (layout unknown)"
+    return redacted
+
+
 def _percent(level: int) -> int:
     return round((level & 0x7F) * 100 / 127)
 

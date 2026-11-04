@@ -34,6 +34,39 @@ def decode(packet: bytes, key: bytes | None):
 
 
 class ProtocolTest(unittest.TestCase):
+    def _assert_no_secrets(self, record, *secrets):
+        redacted = str(protocol.redact_broadcast(record)).lower()
+        for secret in secrets:
+            self.assertNotIn(secret.lower(), redacted)
+
+    def test_redacted_control_frame_does_not_reveal_the_phone_key(self):
+        key = bytes.fromhex("C5D6E7F8")
+        raw = protocol.CommandBuilder(sequence=1).light(5, key, protocol.light_off())
+        info = protocol.describe_broadcast(raw, bytes.fromhex("A1A2A3A4"))
+        record = {**info, "action": protocol.describe_action(info), "raw": raw.hex()}
+        self.assertIn(raw.hex(), str(record))
+        redacted = protocol.redact_broadcast(record)
+        self.assertEqual(redacted["raw"], "**REDACTED**")
+        self.assertEqual(redacted["safe_key"], "**REDACTED**")
+        self.assertEqual(redacted["kind"], "control")
+        self._assert_no_secrets(record, raw.hex(), info["data"])
+
+    def test_redacted_discovery_does_not_reveal_the_device_key(self):
+        header = bytes(b ^ k for b, k in zip(bytes((0x10, 1, 5, 0)), protocol.DEFAULT_ENCRYPT_KEY))
+        raw = header + bytes.fromhex("AABBCCDDEEFF") + bytes((0xA1, 0xA8)) + bytes.fromhex("C5D6E7F8")
+        info = protocol.describe_broadcast(raw, bytes.fromhex("A1A2A3A4"))
+        self.assertEqual(info["device_key"], "C5D6E7F8")
+        self._assert_no_secrets(
+            {**info, "action": protocol.describe_action(info), "raw": raw.hex()}, "C5D6E7F8"
+        )
+
+    def test_redacted_new_protocol_frame_hides_its_bytes_in_the_action(self):
+        raw = protocol.NEW_PROTOCOL_MAGIC + bytes.fromhex("C5D6E7F8") * 5
+        info = protocol.describe_broadcast(raw, bytes.fromhex("A1A2A3A4"))
+        record = {**info, "action": protocol.describe_action(info)}
+        self.assertIn("c5d6e7f8", record["action"])
+        self._assert_no_secrets(record, "c5d6e7f8")
+
     def test_crc_is_x25(self):
         self.assertEqual(protocol.crc16(b"", b"123456789"), 0x906E)
 

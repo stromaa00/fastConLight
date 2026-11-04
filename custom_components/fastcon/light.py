@@ -9,6 +9,7 @@ from homeassistant.components.light import (
     ATTR_EFFECT,
     ATTR_RGB_COLOR,
     ATTR_WHITE,
+    EFFECT_OFF,
     ColorMode,
     LightEntity,
     LightEntityFeature,
@@ -157,19 +158,27 @@ class _FastconLightBase(LightEntity, RestoreEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on, optionally changing brightness, colour, white or effect.
 
-        A colour or white command ends a running effect; plain on (or a new
-        brightness) keeps it running, as the lights do.
+        A colour or white command ends a running effect, so `effect: off` sends
+        the last colour or white; plain on (or a new brightness) keeps it
+        running, as the lights do.
         """
         modes = self._attr_supported_color_modes
         if ATTR_BRIGHTNESS in kwargs:
             self._attr_brightness = kwargs[ATTR_BRIGHTNESS]
         if ATTR_EFFECT in kwargs and (effect := self._hub.effect(kwargs[ATTR_EFFECT])):
-            self._send_effect(effect)
+            self._send_effect(
+                effect,
+                light_on(_level(kwargs[ATTR_BRIGHTNESS])) if ATTR_BRIGHTNESS in kwargs else None,
+            )
             self._attr_effect = effect["name"]
             self._attr_is_on = True
             self.async_write_ha_state()
             return
-        if self._attr_effect and not (ATTR_WHITE in kwargs or ATTR_RGB_COLOR in kwargs):
+        if self._attr_effect and not (
+            ATTR_WHITE in kwargs
+            or ATTR_RGB_COLOR in kwargs
+            or kwargs.get(ATTR_EFFECT) == EFFECT_OFF
+        ):
             self._send(light_on(_level(self._attr_brightness or 255)))
             self._attr_is_on = True
             self.async_write_ha_state()
@@ -210,7 +219,7 @@ class _FastconLightBase(LightEntity, RestoreEntity):
     def _send(self, command: bytes) -> None:
         raise NotImplementedError
 
-    def _send_effect(self, effect: dict) -> None:
+    def _send_effect(self, effect: dict, brightness: bytes | None) -> None:
         raise NotImplementedError
 
 
@@ -263,8 +272,8 @@ class FastconLight(_FastconLightBase):
     def _send(self, command: bytes) -> None:
         self._hub.async_send_light(self._device, command)
 
-    def _send_effect(self, effect: dict) -> None:
-        self._hub.async_send_effect([self._device], effect)
+    def _send_effect(self, effect: dict, brightness: bytes | None) -> None:
+        self._hub.async_send_effect([self._device], effect, brightness)
 
 
 class FastconAllLights(_FastconLightBase):
@@ -280,8 +289,8 @@ class FastconAllLights(_FastconLightBase):
     def _send(self, command: bytes) -> None:
         self._hub.async_send_all(command)
 
-    def _send_effect(self, effect: dict) -> None:
-        self._hub.async_send_effect(list(self._hub.devices.values()), effect)
+    def _send_effect(self, effect: dict, brightness: bytes | None) -> None:
+        self._hub.async_send_effect(list(self._hub.devices.values()), effect, brightness)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn all lights on; the single lights take over the state."""
@@ -346,8 +355,8 @@ class FastconGroupLight(_FastconLightBase):
     def _send(self, command: bytes) -> None:
         self._hub.async_send_group(self._group_id, command)
 
-    def _send_effect(self, effect: dict) -> None:
-        self._hub.async_send_effect(self._hub.group_members(self._group_id), effect)
+    def _send_effect(self, effect: dict, brightness: bytes | None) -> None:
+        self._hub.async_send_effect(self._hub.group_members(self._group_id), effect, brightness)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the group on; its lights take over the state."""

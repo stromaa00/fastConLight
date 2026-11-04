@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from . import FastconConfigEntry
 from .const import CONF_PHONE_KEY
+from .protocol import redact_broadcast
 
 TO_REDACT = {CONF_PHONE_KEY, "key"}
 
@@ -33,5 +34,5 @@ async def async_get_config_entry_diagnostics(
         ],
         "listening_since": hub.setup_time,
         "received_broadcasts": hub.received_count,
-        "recent_broadcasts": list(hub.recent_broadcasts),
+        "recent_broadcasts": [redact_broadcast(record) for record in hub.recent_broadcasts],
     }

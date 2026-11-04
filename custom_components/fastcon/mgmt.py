@@ -168,10 +168,16 @@ class MgmtAdvertiser:
         async with asyncio.timeout(REQUEST_TIMEOUT):
             while True:
                 packet = await loop.sock_recv(self._sock, 512)
+                if not packet:
+                    raise OSError("MGMT socket closed")
+                if len(packet) < 6:
+                    continue
                 event, index, length = struct.unpack_from("<HHH", packet)
                 if event not in (MGMT_EV_CMD_COMPLETE, MGMT_EV_CMD_STATUS) or index != self._index:
                     continue
                 body = packet[6 : 6 + length]
+                if len(body) < 3:
+                    continue
                 op, status = struct.unpack_from("<HB", body)
                 if op != opcode:
                     continue
