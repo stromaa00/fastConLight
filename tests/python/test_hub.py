@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
@@ -97,6 +97,7 @@ from custom_components.fastcon.protocol import (  # noqa: E402
 )
 
 DID = "AABBCCDDEEFF"
+OTHER_DID = "112233445566"
 
 
 def _device(did: str = DID) -> FastconDevice:
@@ -258,6 +259,138 @@ class EffectTest(unittest.IsolatedAsyncioTestCase):
         await self.light.async_turn_on()
         self.assertEqual(self.light._attr_effect, self.name)
         self.assertEqual(sent, [light_on(127)])
+
+
+class TakingTurnsTest(unittest.IsolatedAsyncioTestCase):
+    """The send queue, with short times: a slot of 20 ms, commands of 60 ms."""
+
+    def setUp(self):
+        for name, value in (("ADVERTISE_SLOT", 0.02), ("AIR_TIME_TOLERANCE", 0.001)):
+            patcher = patch(f"custom_components.fastcon.hub.{name}", value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.hub = _hub()
+        self.hub.duration = 0.06
+        self.aired: list[str] = []
+
+        async def advertise(_manufacturer, payload, duration):
+            self.aired.append(self.names[payload])
+            await asyncio.sleep(duration)
+
+        self.names: dict[bytes, str] = {}
+        self.hub._advertiser.advertise = advertise
+
+    def _command(self, name: str, **kwargs) -> None:
+        payload = name.encode()
+        self.names[payload] = name
+        self.hub._queue(name, lambda: payload, lambda: name, **kwargs)
+
+    async def _run(self, seconds: float = 0.4) -> None:
+        task = asyncio.create_task(self.hub._async_send_loop())
+        await asyncio.sleep(seconds)
+        self.assertFalse(task.done())
+        task.cancel()
+
+    def _finished(self) -> list[str]:
+        return [record["action"] for record in self.hub.recent_broadcasts]
+
+    async def test_a_command_alone_stays_on_air_in_one_piece(self):
+        self._command("a")
+        await self._run()
+        self.assertEqual(self.aired, ["a"])
+        self.assertEqual(self._finished(), ["a"])
+
+    async def test_several_commands_take_turns_and_all_get_their_time(self):
+        self._command("a")
+        self._command("b")
+        await self._run()
+        self.assertGreater(self.aired.count("a"), 1)
+        self.assertGreater(self.aired.count("b"), 1)
+        self.assertEqual(self.aired[:2], ["a", "b"])
+        self.assertCountEqual(self._finished(), ["a", "b"])
+
+    async def test_a_new_command_interrupts_a_long_one_after_a_slot(self):
+        self.hub.duration = 0.2
+        self._command("a")
+        task = asyncio.create_task(self.hub._async_send_loop())
+        await asyncio.sleep(0.03)
+        self.assertEqual(self.aired, ["a"])
+        self._command("b")
+        await asyncio.sleep(0.03)
+        self.assertEqual(self.aired[-1], "b")
+        await asyncio.sleep(0.6)
+        task.cancel()
+        self.assertCountEqual(self._finished(), ["a", "b"])
+
+    async def test_a_payload_keeps_its_sequence_number_across_turns(self):
+        self.hub.async_send_light(_device(), light_on(10))
+        self.hub.async_send_light(_device(OTHER_DID), light_on(10))
+        payloads = []
+
+        async def advertise(_manufacturer, payload, duration):
+            payloads.append(payload)
+            await asyncio.sleep(duration)
+
+        self.hub._advertiser.advertise = advertise
+        await self._run()
+        self.assertEqual(len(set(payloads)), 2)
+        self.assertGreater(len(payloads), 2)
+
+    async def test_commands_for_the_same_light_keep_their_order(self):
+        device = _device()
+        self._command("effect", device=device)
+        self._command("brightness", device=device)
+        self._command("other", device=_device(OTHER_DID))
+        await self._run()
+        self.assertLess(
+            len(self.aired) - 1 - self.aired[::-1].index("effect"),
+            self.aired.index("brightness"),
+        )
+        self.assertIn("other", self.aired[:2])
+
+    async def test_a_single_light_waits_for_a_group_it_is_in(self):
+        self._command("group", targets=frozenset((DID,)))
+        self._command("single", device=_device())
+        await self._run()
+        self.assertLess(
+            len(self.aired) - 1 - self.aired[::-1].index("group"),
+            self.aired.index("single"),
+        )
+
+    async def test_light_types_of_a_group_do_not_wait_for_each_other(self):
+        self._command("type 1", targets=frozenset((DID,)))
+        self._command("type 2", targets=frozenset((OTHER_DID,)))
+        await self._run()
+        self.assertEqual(self.aired[:2], ["type 1", "type 2"])
+
+    async def test_a_newer_command_replaces_one_on_air(self):
+        self.hub.duration = 0.2
+        self._command("old")
+        task = asyncio.create_task(self.hub._async_send_loop())
+        await asyncio.sleep(0.03)
+        payload = b"new"
+        self.names[payload] = "new"
+        self.hub._queue("old", lambda: payload, lambda: "new")
+        await asyncio.sleep(0.5)
+        task.cancel()
+        self.assertEqual(self.aired, ["old", "new"])
+        self.assertEqual(self._finished(), ["old", "new"])
+
+    async def test_a_failing_adapter_is_reported_once_and_not_retried_at_full_speed(self):
+        attempts = 0
+
+        async def advertise(_manufacturer, _payload, _duration):
+            nonlocal attempts
+            attempts += 1
+            raise ValueError("no adapter")
+
+        self.hub._advertiser.advertise = advertise
+        self._command("a")
+        self._command("b")
+        await self._run()
+        self.assertLess(attempts, 10)
+        results = [record["result"] for record in self.hub.recent_broadcasts]
+        self.assertEqual(results, ["hci0: no adapter"] * 2)
 
 
 if __name__ == "__main__":

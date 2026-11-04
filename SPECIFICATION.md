@@ -335,7 +335,7 @@ The `custom_components/fastcon` integration runs inside Home Assistant and uses 
 - **Sending:** HA's Bluetooth stack can only scan, so commands are broadcast through the Linux Bluetooth management API (MGMT, *Add Extended Advertising Parameters/Data*) with the same 31 bytes the firmware sends (flags `02 01 02` + manufacturer data `0xFFF0` + 24-byte command), at a 100 ms interval for the configured duration (default 3 s).
   - BlueZ's D-Bus `LEAdvertisement1` API is only a fallback: it reserves space for its own flags, so the kernel rejects the 31-byte packet with `Invalid Parameters (0x0d)` (seen on a Home Assistant Yellow).
   - MGMT needs `CAP_NET_ADMIN`, which the Home Assistant OS core container has.
-- **Queue:** one command is on air at a time. A newer command for the same light replaces an unsent one, so dragging a slider doesn't build a backlog.
+- **Queue:** one command is on air at a time, alone for its full duration (default 3 s). If others wait, they take turns in slots of 0.3 s, least air time first, until each had its full duration; a new command so starts after 0.3 s at the latest instead of waiting for the ones before it. Commands reaching the same lights keep their order (e.g. bind, then group; effect, then brightness). A newer command for the same light replaces the older one, even while that is on air, so dragging a slider doesn't build a backlog.
 - **All lights:** each entry has an *All lights* light entity. Like the BRMesh app, it sends one control command per light device type in the mesh (control type 3: `[3 | (n + 3) << 4] [type lo] [type hi] 00 [command]`, e.g. `43 2a a8 00 00` = all RGBCW off) instead of one per light, and drops unsent commands for single lights. With no known lights it falls back to mesh address 0, which lights follow for "on" but not "off". The single light entities take over its state. Details: [docs/BRMESH_APP_NOTES.md](docs/BRMESH_APP_NOTES.md).
 - **Storage:** discovered/added devices and their mesh addresses are saved in HA storage and survive restarts.
 - **Several meshes:** every config entry is one mesh with its own phone key (a second entry with a key already in use is refused). Entries may share an adapter and ESP32 transmitters; one lock across all entries keeps a single command on air at a time. Heartbeats carry a checksum over data encrypted with the phone key, so each entry only accepts its own lights' heartbeats. Discovery broadcasts don't reveal the mesh, so a light no entry knows is adopted by the entry that sent the most recent scan within the last 120 s (`SCAN_ADOPT_WINDOW`), otherwise by the first entry with auto-bind on, or by the first entry if none has it on; a light known to one entry is ignored by the others, and adding it manually to a second entry is refused. Bluetooth discovery only offers the first entry; further meshes are added with **Add entry**.
@@ -809,7 +809,7 @@ esphome compile fastcon-esp32.yaml --verbose
 - **L-010:** ESP32 firmware requires Bluetooth 5.0 extended advertising (ESP32-S3/C3/C6/H2)
 - **L-011:** Original ESP32 boards (T-Beam, ESP32-POE) are not supported by the ESP32 firmware; use the HA Bluetooth option instead
 - **L-016:** HA Bluetooth option needs Linux, `CAP_NET_ADMIN` and a local adapter; it cannot send through Bluetooth proxies
-- **L-017:** HA Bluetooth option sends one command at a time (default 3 s each)
+- **L-017:** HA Bluetooth option has one command on air at a time (several take turns, each default 3 s in total)
 - **L-012:** Custom partition table required for ESP32-C6
 
 ### 11.3 Protocol Limitations

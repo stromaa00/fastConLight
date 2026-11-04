@@ -17,6 +17,9 @@ CONF_MESH_ADDRESS = "mesh_address"
 DEFAULT_PHONE_KEY = "A1A2A3A4"
 # The firmware advertises each command for 3 s; lights usually react much sooner.
 DEFAULT_ADVERTISE_DURATION = 3.0
+# With several commands waiting, each gets this long on air in turn until it had
+# its full duration, so a new command starts at the latest after this time.
+ADVERTISE_SLOT = 0.3  # seconds
 # Time between advertising packets. Connectable advertising (used first)
 # allows down to 20 ms; more packets give weak lights more chances.
 DEFAULT_ADVERTISE_INTERVAL = 100  # ms

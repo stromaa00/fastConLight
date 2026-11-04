@@ -6,7 +6,8 @@ import asyncio
 from collections import deque
 import copy
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from contextlib import suppress
+from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 import logging
 import statistics
@@ -24,6 +25,7 @@ from homeassistant.util import dt as dt_util
 
 from .advertiser import Advertiser
 from .const import (
+    ADVERTISE_SLOT,
     AUTO_BIND_COOLDOWN,
     AVAILABILITY_CHECK_INTERVAL,
     CONF_ADAPTER,
@@ -84,6 +86,8 @@ RECENT_BROADCASTS = 1000  # kept for the diagnostics download
 LIGHT_BROADCAST_ADDRESS = "11:22:33:44:55:66"
 
 STORAGE_VERSION = 1
+# A command counts as fully sent once it is this close to its duration (seconds)
+AIR_TIME_TOLERANCE = 0.05
 
 
 def _send_lock(hass: HomeAssistant) -> asyncio.Lock:
@@ -126,6 +130,22 @@ class FastconDevice:
         return f"{self.name}-{self.did}-{self.device_type:04X}-{self.key}"
 
 
+@dataclass(eq=False)
+class _Command:
+    """A command in the send queue, built when it first goes on air."""
+
+    key: str
+    build: Callable[[], bytes]
+    action: Callable[[], str]
+    device: FastconDevice | None
+    # DIDs of the lights it reaches: commands sharing one keep their order
+    targets: frozenset[str]
+    payload: bytes | None = None
+    sequence: int | None = None
+    aired: float = 0.0  # seconds on air so far
+    errors: list[str] = field(default_factory=list)
+
+
 def _brightness_key(device: FastconDevice) -> str:
     """Send queue key of the brightness command that follows an effect.
 
@@ -165,12 +185,10 @@ class FastconHub:
         self.use_local_adapter: bool = config.get(CONF_USE_LOCAL_ADAPTER, True)
         self._advertiser = Advertiser(self.adapter, self.interval_ms)
         self._builder = CommandBuilder()
-        # Pending commands keyed by target, so a newer command for the same
-        # light replaces one that hasn't been sent yet (e.g. slider drags).
-        # key -> (build payload, describe action, target device)
-        self._pending: dict[
-            str, tuple[Callable[[], bytes], Callable[[], str], FastconDevice | None]
-        ] = {}
+        # Commands not fully sent yet, oldest first and keyed by target, so a
+        # newer command for the same light replaces its older one (e.g. slider
+        # drags), even while that one is on air.
+        self._pending: dict[str, _Command] = {}
         self._wakeup = asyncio.Event()
         # Monotonic time of the last heartbeat per DID, and DIDs considered offline
         self._last_heartbeat: dict[str, float] = {}
@@ -778,7 +796,7 @@ class FastconHub:
                 lambda: f"effect {effect['name']}",
                 device,
             )
-            self._pending.pop(_brightness_key(device), None)
+            self._drop(_brightness_key(device))
             if brightness is not None:
                 self._queue(
                     _brightness_key(device),
@@ -897,8 +915,8 @@ class FastconHub:
         """
         members = self.group_members(group_id)
         for device in members:
-            self._pending.pop(f"light:{device.did}", None)
-            self._pending.pop(_brightness_key(device), None)
+            self._drop(f"light:{device.did}")
+            self._drop(_brightness_key(device))
         for device_type in sorted({d.device_type for d in members}):
             self._queue(
                 f"light:group:{group_id}:{device_type}",
@@ -909,6 +927,7 @@ class FastconHub:
                     f"group {self.groups.get(group_id, group_id)} "
                     f"({device_type_name(t)}): {describe_command(command)}"
                 ),
+                targets=frozenset(d.did for d in members if d.device_type == device_type),
             )
 
     @callback
@@ -995,7 +1014,7 @@ class FastconHub:
     @callback
     def async_send_light(self, device: FastconDevice, command: bytes) -> None:
         """Queue a light command, replacing any unsent one for the same light."""
-        self._pending.pop(_brightness_key(device), None)
+        self._drop(_brightness_key(device))
         self._queue(
             f"light:{device.did}",
             lambda: self._builder.light(device.mesh_address, self.phone_key, command),
@@ -1012,7 +1031,7 @@ class FastconHub:
         for single lights are dropped, as these override them.
         """
         for key in [key for key in self._pending if key.startswith("light:")]:
-            del self._pending[key]
+            self._drop(key)
         types = sorted({d.device_type for d in self.devices.values() if is_light(d.device_type)})
         if not types:
             self._queue(
@@ -1027,6 +1046,11 @@ class FastconHub:
                 lambda t=device_type: (
                     f"all {device_type_name(t)} lights: {describe_command(command)}"
                 ),
+                targets=frozenset(
+                    d.did
+                    for d in self.devices.values()
+                    if d.device_type == device_type
+                ),
             )
 
     def _queue(
@@ -1035,44 +1059,65 @@ class FastconHub:
         build: Callable[[], bytes],
         action: Callable[[], str],
         device: FastconDevice | None = None,
+        targets: frozenset[str] = frozenset(),
     ) -> None:
-        self._pending[key] = (build, action, device)
+        self._drop(key)
+        self._pending[key] = _Command(
+            key, build, action, device, frozenset((device.did,)) if device else targets
+        )
         self._wakeup.set()
 
-    async def _async_broadcast(self, key: str, payload: bytes) -> list[str]:
+    def _drop(self, key: str) -> None:
+        """Forget a command, logging it if it already went on air."""
+        command = self._pending.pop(key, None)
+        if command is not None and command.payload is not None:
+            self._record_sent(command)
+
+    def _ready_commands(self) -> list[_Command]:
+        """Commands that may go on air: no older one reaches the same lights."""
+        ready = []
+        busy: set[str] = set()
+        for command in self._pending.values():
+            if not command.targets & busy:
+                ready.append(command)
+            busy |= command.targets
+        return ready
+
+    async def _async_broadcast(self, command: _Command, duration: float) -> None:
         """Send from the local adapter and every ESP32 transmitter at once.
 
-        Returns the errors; waits the advertising duration either way so the
-        next command doesn't cut this one short on the transmitters.
+        Collects errors on the command; waits `duration` either way so the next
+        command doesn't cut this one short on the transmitters, and a failing
+        adapter isn't retried at full speed.
         """
-        errors: list[str] = []
+        payload = command.payload
+
+        def failed(sender: str, err: Exception) -> None:
+            if (error := f"{sender}: {err}") not in command.errors:
+                command.errors.append(error)
 
         async def local() -> None:
             try:
-                await self._advertiser.advertise(MANUFACTURER_ID, payload, self.duration)
+                await self._advertiser.advertise(MANUFACTURER_ID, payload, duration)
             except Exception as err:  # noqa: BLE001 - report any adapter failure
-                errors.append(f"{self.adapter}: {err}")
-                _LOGGER.error("Could not advertise on %s (%s): %s", self.adapter, key, err)
+                failed(self.adapter, err)
 
         async def remote(action: str) -> None:
             try:
                 await self.hass.services.async_call(
                     "esphome",
                     action,
-                    {"payload": payload.hex(), "duration_ms": int(self.duration * 1000)},
+                    {"payload": payload.hex(), "duration_ms": int(duration * 1000)},
                     blocking=True,
                 )
             except Exception as err:  # noqa: BLE001 - report any transmitter failure
-                errors.append(f"esphome.{action}: {err}")
-                _LOGGER.error("Could not send through esphome.%s (%s): %s", action, key, err)
+                failed(f"esphome.{action}", err)
 
         tasks = [remote(action) for action in self.transmitters]
         if self.use_local_adapter or not self.transmitters:
             tasks.append(local())
-        else:
-            tasks.append(asyncio.sleep(self.duration))
+        tasks.append(asyncio.sleep(duration))
         await asyncio.gather(*tasks)
-        return errors
 
     def _via(self) -> list[str]:
         via = [f"esphome.{action}" for action in self.transmitters]
@@ -1080,20 +1125,23 @@ class FastconHub:
             via.insert(0, self.adapter)
         return via
 
-    def _record_sent(
-        self, action: str, device: FastconDevice | None, payload: bytes, error: str | None
-    ) -> None:
+    def _record_sent(self, command: _Command) -> None:
         """Log a command we sent; lights don't relay binds and scans, so we never hear them."""
+        device = command.device
+        action = command.action()
+        error = "; ".join(command.errors) or None
+        if error:
+            _LOGGER.error("Could not send %s (%s): %s", command.key, action, error)
         record = {
             "time": dt_util.utcnow().isoformat(),
             "direction": "sent",
             "action": action,
             "light": device.name if device else None,
             "mesh_address": device.mesh_address if device else None,
-            "sequence": self._builder.last_sequence,
+            "sequence": command.sequence,
             "via": self._via(),
             "result": error or "ok",
-            "raw": payload.hex(),
+            "raw": command.payload.hex(),
         }
         self.recent_broadcasts.append(record)
         _BROADCAST_LOGGER.info(
@@ -1107,24 +1155,61 @@ class FastconHub:
             await self._wakeup.wait()
             self._wakeup.clear()
             while self._pending:
-                key = next(iter(self._pending))
-                build, action, device = self._pending.pop(key)
+                ready = self._ready_commands()
+                # Least air time first: a new command goes next, then they take turns
+                command = min(ready, key=lambda c: c.aired)
                 try:
-                    await self._async_send(key, build, action, device)
+                    await self._async_air(command, take_turns=len(ready) > 1)
                 except Exception:  # noqa: BLE001 - one bad command must not stop later ones
-                    _LOGGER.exception("Could not send %s", key)
+                    _LOGGER.exception("Could not send %s", command.key)
+                    self._pending.pop(command.key, None)
+                    continue
+                if (
+                    self._pending.get(command.key) is command
+                    and command.aired >= self.duration - AIR_TIME_TOLERANCE
+                ):
+                    self._drop(command.key)
 
-    async def _async_send(
-        self,
-        key: str,
-        build: Callable[[], bytes],
-        action: Callable[[], str],
-        device: FastconDevice | None,
-    ) -> None:
-        payload = build()
-        self._sent_sequences.append(self._builder.last_sequence)
-        self._sent_payloads.append(payload)
-        _LOGGER.debug("Sending %s: %s", key, payload.hex())
+    async def _async_air(self, command: _Command, take_turns: bool) -> None:
+        """Put a command on air for one turn.
+
+        Alone it gets all its remaining time, cut short after a slot if another
+        command comes in. Other meshes can't announce theirs, so with several
+        meshes commands always take turns.
+        """
+        if command.payload is None:
+            command.payload = command.build()
+            command.sequence = self._builder.last_sequence
+            self._sent_sequences.append(command.sequence)
+            self._sent_payloads.append(command.payload)
+            _LOGGER.debug("Sending %s: %s", command.key, command.payload.hex())
+        take_turns = take_turns or len(self._hubs()) > 1
+        remaining = max(self.duration - command.aired, 0)
+        duration = min(ADVERTISE_SLOT, remaining) if take_turns else remaining
         async with _send_lock(self.hass):
-            errors = await self._async_broadcast(key, payload)
-        self._record_sent(action(), device, payload, "; ".join(errors) if errors else None)
+            start = time.monotonic()
+            broadcast = asyncio.create_task(self._async_broadcast(command, duration))
+            try:
+                if take_turns:
+                    await broadcast
+                else:
+                    await self._async_wait_for_new_command(broadcast, start)
+            finally:
+                if not broadcast.done():
+                    broadcast.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await broadcast
+                command.aired += time.monotonic() - start
+
+    async def _async_wait_for_new_command(self, broadcast: asyncio.Task, start: float) -> None:
+        """Wait until a broadcast ends, or a new command came and it had a slot."""
+        self._wakeup.clear()
+        wakeup = asyncio.create_task(self._wakeup.wait())
+        try:
+            await asyncio.wait({broadcast, wakeup}, return_when=asyncio.FIRST_COMPLETED)
+            if not broadcast.done():
+                left = ADVERTISE_SLOT - (time.monotonic() - start)
+                if left > 0:
+                    await asyncio.wait({broadcast}, timeout=left)
+        finally:
+            wakeup.cancel()
